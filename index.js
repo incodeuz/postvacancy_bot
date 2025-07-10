@@ -146,7 +146,6 @@ const userStates = {
   awaitingPhoneNumber: {},
   postingType: {},
   selectedTariff: {},
-  awaitingAdData: {}, // New state for ad data
 };
 
 // Statistics tracking
@@ -605,9 +604,7 @@ bot.onText(/\/admin-help/, async (msg) => {
 • <b>/admin-panel</b> - Admin panel va statistikalar
 • <b>/admin-help</b> - Bu yordam sahifasi
 
-📢 <b>Reklama Boshqaruvi:</b>
-• <b>/rek</b> - Barcha reklamalar ro'yxati
-• <b>/new-rek</b> - Yangi reklama qo'shish
+
 
 🧪 <b>Test Komandalar:</b>
 • <b>/test-ads</b> - Reklama deletion test qilish
@@ -623,12 +620,6 @@ bot.onText(/\/admin-help/, async (msg) => {
             {
               text: "📊 Admin Panel",
               callback_data: "admin_panel_button",
-            },
-          ],
-          [
-            {
-              text: "📢 Reklamalar",
-              callback_data: "view_ads",
             },
           ],
         ],
@@ -741,9 +732,7 @@ bot.onText(/\/admin-panel/, async (msg) => {
 ● Rad etilgan: ${rejectedVacancies}
 ● Kutilmoqda: ${pendingCount}
 
-📊 <b>Reklamalar:</b>
-● Faol: ${await Advertisement.countDocuments({ isActive: true })}
-● Jami: ${await Advertisement.countDocuments()}
+
       `;
 
       // Edit the loading message with real data
@@ -765,12 +754,6 @@ bot.onText(/\/admin-panel/, async (msg) => {
                 callback_data: "detailed_stats",
               },
             ],
-            [
-              {
-                text: "📢 Reklamalar",
-                callback_data: "view_ads",
-              },
-            ],
           ],
         },
       });
@@ -787,119 +770,6 @@ bot.onText(/\/admin-panel/, async (msg) => {
   } else {
     bot.sendMessage(chatId, "⛔️ Sizda admin panelini ko'rish huquqi yo'q.");
   }
-});
-
-// Advertisement management commands
-bot.onText(/\/rek/, async (msg) => {
-  const chatId = msg.chat.id;
-  if (chatId.toString() !== adminId) {
-    bot.sendMessage(chatId, "⛔️ Bu komanda faqat admin uchun.");
-    return;
-  }
-
-  try {
-    const ads = await Advertisement.find().sort({ createdAt: -1 });
-
-    if (ads.length === 0) {
-      bot.sendMessage(
-        chatId,
-        "📝 Hech qanday reklama topilmadi.\n\n📌 Yangi reklama qo'shish uchun: <b>/new-rek</b>",
-        { parse_mode: "HTML" }
-      );
-      return;
-    }
-
-    let message = "📢 <b>Reklamalar ro'yxati:</b>\n\n";
-
-    ads.forEach((ad, index) => {
-      const now = new Date();
-      const timeLeft = ad.endDate - now;
-      const status = ad.isActive && timeLeft > 0 ? "🟢 Faol" : "🔴 Tugagan";
-
-      message += `<b>${index + 1}.</b> ${status}\n`;
-      message += `🔗 Link: ${ad.channelLink}\n`;
-      message += `📅 Boshlangan: ${ad.startDate.toLocaleString("uz-UZ")}\n`;
-      message += `⏰ Tugaydi: ${ad.endDate.toLocaleString("uz-UZ")}\n`;
-
-      // Show original duration
-      let originalDurationText = "";
-      if (ad.durationDays > 0)
-        originalDurationText += `${ad.durationDays} kun `;
-      if (ad.durationHours > 0)
-        originalDurationText += `${ad.durationHours} soat `;
-      if (ad.durationMinutes > 0)
-        originalDurationText += `${ad.durationMinutes} minut`;
-      if (originalDurationText) {
-        message += `📊 Muddat: ${originalDurationText.trim()}\n`;
-      } else {
-        message += `📊 Muddat: 0 minut\n`;
-      }
-
-      // Show remaining time if active
-      if (ad.isActive && timeLeft > 0) {
-        const minutesLeft = Math.floor(timeLeft / (1000 * 60));
-        const hoursLeft = Math.floor(minutesLeft / 60);
-        const daysLeft = Math.floor(hoursLeft / 24);
-
-        let timeLeftText = "";
-        if (daysLeft > 0) {
-          timeLeftText += `${daysLeft} kun `;
-          const remainingHours = hoursLeft % 24;
-          if (remainingHours > 0) timeLeftText += `${remainingHours} soat `;
-        } else if (hoursLeft > 0) {
-          timeLeftText += `${hoursLeft} soat `;
-          const remainingMinutes = minutesLeft % 60;
-          if (remainingMinutes > 0) timeLeftText += `${remainingMinutes} minut`;
-        } else {
-          timeLeftText = `${minutesLeft} minut`;
-        }
-
-        message += `⏳ Qolgan: ${timeLeftText.trim()}\n`;
-      }
-
-      if (ad.description) {
-        message += `📝 ${ad.description}\n`;
-      }
-      message += `\n`;
-    });
-
-    bot.sendMessage(chatId, message, {
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "➕ Yangi reklama qo'shish", callback_data: "add_new_ad" }],
-        ],
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching ads:", error);
-    bot.sendMessage(chatId, "❌ Reklamalarni yuklashda xatolik yuz berdi.");
-  }
-});
-
-bot.onText(/\/new-rek/, async (msg) => {
-  const chatId = msg.chat.id;
-  if (chatId.toString() !== adminId) {
-    bot.sendMessage(chatId, "⛔️ Bu komanda faqat admin uchun.");
-    return;
-  }
-
-  userStates.awaitingAdData = userStates.awaitingAdData || {};
-  userStates.awaitingAdData[chatId] = {
-    step: "link",
-    durationDays: 0,
-    durationHours: 0,
-    durationMinutes: 0,
-  };
-
-  await bot.sendMessage(
-    chatId,
-    "📢 <b>Yangi reklama qo'shish</b>\n\n" +
-      "🔗 Kanal linkini yuboring:\n" +
-      "<i>Misol: https://t.me/channel_name/123</i>\n\n" +
-      "⚠️ <b>Muhim:</b> Linkda post ID bo'lishi kerak (oxiridagi raqam)",
-    { parse_mode: "HTML" }
-  );
 });
 
 // Manual command to test ad deletion (admin only)
@@ -1018,10 +888,6 @@ bot.on("callback_query", async (callbackQuery) => {
       await handleUserList(callbackQuery);
     } else if (data === "detailed_stats") {
       await handleDetailedStats(callbackQuery);
-    } else if (data === "view_ads") {
-      await handleViewAds(callbackQuery);
-    } else if (data === "add_new_ad") {
-      await handleAddNewAdCallback(chatId);
     } else if (data.startsWith("tariff_")) {
       await handleTariffSelection(chatId, data, callbackQuery);
     } else if (data === "admin_panel_button") {
@@ -1038,10 +904,6 @@ bot.on("callback_query", async (callbackQuery) => {
       await handleServiceConfirmation(chatId, callbackQuery);
     } else if (data === "cancel_service_post") {
       await handleServiceCancellation(chatId, callbackQuery);
-    } else if (data === "confirm_ad") {
-      await handleConfirmAd(chatId, callbackQuery);
-    } else if (data === "cancel_ad") {
-      await handleCancelAd(chatId, callbackQuery);
     }
   } catch (error) {
     console.error("Callback query error:", error);
@@ -1138,8 +1000,6 @@ bot.on("message", async (msg) => {
     } else if (userStates.awaitingService[chatId]) {
       stats.users.add(chatId);
       await handleServiceInput(chatId, msg);
-    } else if (userStates.awaitingAdData && userStates.awaitingAdData[chatId]) {
-      await handleAdInput(chatId, msg);
     }
   } catch (error) {
     console.error("Error handling message:", error);
@@ -1402,10 +1262,6 @@ function cleanup(chatId) {
   delete userStates.awaitingPhoneNumber[chatId];
   delete userStates.postingType[chatId];
   delete userStates.selectedTariff[chatId];
-
-  if (userStates.awaitingAdData && userStates.awaitingAdData[chatId]) {
-    delete userStates.awaitingAdData[chatId];
-  }
 }
 
 async function handleCallbackError(callbackQuery, error) {
@@ -1734,53 +1590,6 @@ async function handleDetailedStats(callbackQuery) {
   }
 }
 
-// Stub functions for remaining handlers
-async function handleViewAds(callbackQuery) {
-  const chatId = callbackQuery.message.chat.id;
-  if (chatId.toString() !== adminId) return;
-
-  try {
-    const ads = await Advertisement.find().sort({ createdAt: -1 });
-    if (ads.length === 0) {
-      await bot.editMessageText("📝 Hech qanday reklama topilmadi.", {
-        chat_id: chatId,
-        message_id: callbackQuery.message.message_id,
-      });
-      return;
-    }
-
-    let message = "📢 <b>Reklamalar ro'yxati:</b>\n\n";
-    ads.forEach((ad, index) => {
-      const status = ad.isActive ? "🟢 Faol" : "🔴 Tugagan";
-      message += `<b>${index + 1}.</b> ${status}\n`;
-      message += `🔗 ${ad.channelLink}\n\n`;
-    });
-
-    await bot.editMessageText(message, {
-      chat_id: chatId,
-      message_id: callbackQuery.message.message_id,
-      parse_mode: "HTML",
-    });
-  } catch (error) {
-    console.error("Error viewing ads:", error);
-  }
-}
-
-async function handleAddNewAdCallback(chatId) {
-  if (chatId.toString() !== adminId) return;
-
-  userStates.awaitingAdData = userStates.awaitingAdData || {};
-  userStates.awaitingAdData[chatId] = { step: "link" };
-
-  await bot.sendMessage(
-    chatId,
-    "📢 Yangi reklama qo'shish\n\n🔗 Kanal linkini yuboring:",
-    {
-      parse_mode: "HTML",
-    }
-  );
-}
-
 async function handleTariffSelection(chatId, data, callbackQuery) {
   const tariffType = data.split("_")[1];
   const selectedTariff = serviceTariffs[tariffType];
@@ -1840,7 +1649,6 @@ async function handleAdminPanelCallback(callbackQuery) {
         inline_keyboard: [
           [{ text: "👥 Foydalanuvchilar", callback_data: "user_list" }],
           [{ text: "📊 Statistika", callback_data: "detailed_stats" }],
-          [{ text: "📢 Reklamalar", callback_data: "view_ads" }],
         ],
       },
     });
@@ -1973,278 +1781,6 @@ async function handleServiceCancellation(chatId, callbackQuery) {
 async function handleEditInput(chatId, msg) {
   // Stub for edit functionality
   await bot.sendMessage(chatId, "✏️ Edit funksiyasi hozircha mavjud emas.");
-}
-
-async function handleConfirmAd(chatId, callbackQuery) {
-  if (chatId.toString() !== adminId) return;
-
-  const adData = userStates.awaitingAdData[chatId];
-  if (!adData) {
-    await bot.sendMessage(chatId, "❌ Reklama ma'lumotlari topilmadi.");
-    return;
-  }
-
-  try {
-    // Calculate dates
-    const startDate = new Date();
-    const endDate = new Date();
-    endDate.setDate(endDate.getDate() + adData.durationDays);
-    endDate.setHours(endDate.getHours() + adData.durationHours);
-    endDate.setMinutes(endDate.getMinutes() + adData.durationMinutes);
-
-    // Calculate total minutes
-    const totalMinutes =
-      adData.durationDays * 24 * 60 +
-      adData.durationHours * 60 +
-      adData.durationMinutes;
-
-    // Extract channel username and message ID from link
-    let channelUsername = "";
-    let messageId = "";
-
-    try {
-      // Parse the channel link to extract channel username and message ID
-      const linkMatch = adData.channelLink.match(
-        /https:\/\/t\.me\/([^\/]+)\/(\d+)/
-      );
-      if (linkMatch) {
-        channelUsername = "@" + linkMatch[1];
-        messageId = linkMatch[2];
-      } else {
-        // If link format is different, try to extract just the channel
-        const channelMatch = adData.channelLink.match(
-          /https:\/\/t\.me\/([^\/]+)/
-        );
-        if (channelMatch) {
-          channelUsername = "@" + channelMatch[1];
-        }
-      }
-    } catch (error) {
-      console.error("Error parsing channel link:", error);
-    }
-
-    // Create new advertisement
-    const newAd = new Advertisement({
-      channelLink: adData.channelLink,
-      messageId: messageId || Date.now().toString(),
-      startDate: startDate,
-      endDate: endDate,
-      durationDays: adData.durationDays,
-      durationHours: adData.durationHours,
-      durationMinutes: adData.durationMinutes,
-      totalMinutes: totalMinutes,
-      description: adData.description,
-      isActive: true,
-      channelMessageIds:
-        channelUsername && messageId
-          ? [
-              {
-                channel: channelUsername,
-                messageId: messageId,
-              },
-            ]
-          : [],
-    });
-
-    await newAd.save();
-
-    // Format duration text for success message
-    let durationText = "";
-    if (adData.durationDays > 0) {
-      durationText += `${adData.durationDays} kun `;
-    }
-    if (adData.durationHours > 0) {
-      durationText += `${adData.durationHours} soat `;
-    }
-    if (adData.durationMinutes > 0) {
-      durationText += `${adData.durationMinutes} minut`;
-    }
-    if (!durationText) {
-      durationText = "0 minut";
-    }
-
-    await bot.sendMessage(
-      chatId,
-      `✅ Reklama muvaffaqiyatli qo'shildi!\n\n📢 Tavsif: ${
-        adData.description
-      }\n⏰ Davomiylik: ${durationText.trim()}\n📅 Tugash sanasi: ${endDate.toLocaleString(
-        "uz-UZ"
-      )}`,
-      {
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "📊 Admin Panel", callback_data: "admin_panel_button" }],
-            [{ text: "📢 Reklamalar", callback_data: "view_ads" }],
-          ],
-        },
-      }
-    );
-
-    // Clean up state
-    delete userStates.awaitingAdData[chatId];
-  } catch (error) {
-    console.error("Error saving advertisement:", error);
-    await bot.sendMessage(
-      chatId,
-      `❌ Reklama saqlashda xatolik: ${error.message}`
-    );
-  }
-}
-
-async function handleCancelAd(chatId, callbackQuery) {
-  if (chatId.toString() !== adminId) return;
-
-  delete userStates.awaitingAdData[chatId];
-
-  await bot.sendMessage(chatId, "❌ Reklama qo'shish bekor qilindi.", {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "📊 Admin Panel", callback_data: "admin_panel_button" }],
-        [{ text: "📢 Reklamalar", callback_data: "view_ads" }],
-      ],
-    },
-  });
-}
-
-async function handleAdInput(chatId, msg) {
-  if (chatId.toString() !== adminId) return;
-
-  const adData = userStates.awaitingAdData[chatId];
-  if (!adData) return;
-
-  if (adData.step === "link") {
-    // Validate link format
-    const linkMatch = msg.text.match(/https:\/\/t\.me\/([^\/]+)\/(\d+)/);
-    if (!linkMatch) {
-      await bot.sendMessage(
-        chatId,
-        "❌ Noto'g'ri link format!\n\n" +
-          "✅ To'g'ri format: https://t.me/channel_name/123\n" +
-          "⚠️ Linkda post ID bo'lishi kerak (oxiridagi raqam)",
-        { parse_mode: "HTML" }
-      );
-      return;
-    }
-
-    adData.channelLink = msg.text;
-    adData.step = "description";
-
-    await bot.sendMessage(
-      chatId,
-      "📝 Reklama tavsifini kiriting:\n<i>Misol: Yangi xizmatlar haqida ma'lumot</i>",
-      {
-        parse_mode: "HTML",
-      }
-    );
-  } else if (adData.step === "description") {
-    adData.description = msg.text;
-    adData.step = "durationDays";
-
-    await bot.sendMessage(
-      chatId,
-      "📅 Reklama davomiyligini kunlarda kiriting:\n<i>Misol: 7 (0 yozsa soat so'raladi)</i>",
-      {
-        parse_mode: "HTML",
-      }
-    );
-  } else if (adData.step === "durationDays") {
-    const days = parseInt(msg.text);
-    if (isNaN(days) || days < 0) {
-      await bot.sendMessage(
-        chatId,
-        "❌ Noto'g'ri kun. Iltimos, 0 yoki undan katta son kiriting."
-      );
-      return;
-    }
-
-    adData.durationDays = days;
-    adData.step = "durationHours";
-
-    await bot.sendMessage(
-      chatId,
-      "🕐 Reklama davomiyligini soatlarda kiriting:\n<i>Misol: 12 (0 yozsa minut so'raladi)</i>",
-      {
-        parse_mode: "HTML",
-      }
-    );
-  } else if (adData.step === "durationHours") {
-    const hours = parseInt(msg.text);
-    if (isNaN(hours) || hours < 0 || hours > 23) {
-      await bot.sendMessage(
-        chatId,
-        "❌ Noto'g'ri soat. Iltimos, 0-23 oralig'ida son kiriting."
-      );
-      return;
-    }
-
-    adData.durationHours = hours;
-    adData.step = "durationMinutes";
-
-    await bot.sendMessage(
-      chatId,
-      "⏱️ Reklama davomiyligini minutlarda kiriting:\n<i>Misol: 30 (0 yoki undan katta son)</i>",
-      {
-        parse_mode: "HTML",
-      }
-    );
-  } else if (adData.step === "durationMinutes") {
-    const minutes = parseInt(msg.text);
-    if (isNaN(minutes) || minutes < 0 || minutes > 59) {
-      await bot.sendMessage(
-        chatId,
-        "❌ Noto'g'ri minut. Iltimos, 0-59 oralig'ida son kiriting."
-      );
-      return;
-    }
-
-    adData.durationMinutes = minutes;
-    adData.step = "confirm";
-
-    // Calculate end date
-    const startDate = new Date();
-    const endDate = new Date();
-    endDate.setDate(endDate.getDate() + adData.durationDays);
-    endDate.setHours(endDate.getHours() + adData.durationHours);
-    endDate.setMinutes(endDate.getMinutes() + adData.durationMinutes);
-
-    // Format duration text
-    let durationText = "";
-    if (adData.durationDays > 0) {
-      durationText += `${adData.durationDays} kun `;
-    }
-    if (adData.durationHours > 0) {
-      durationText += `${adData.durationHours} soat `;
-    }
-    if (adData.durationMinutes > 0) {
-      durationText += `${adData.durationMinutes} minut`;
-    }
-    if (!durationText) {
-      durationText = "0 minut";
-    }
-
-    const confirmMessage = `📢 <b>Reklama ma'lumotlari:</b>
-
-🔗 Kanal: ${adData.channelLink}
-📝 Tavsif: ${adData.description}
-⏰ Davomiylik: ${durationText.trim()}
-📅 Boshlanish: ${startDate.toLocaleString("uz-UZ")}
-📅 Tugash: ${endDate.toLocaleString("uz-UZ")}
-
-✅ Tasdiqlash uchun "Tasdiqlash" tugmasini bosing:`;
-
-    await bot.sendMessage(chatId, confirmMessage, {
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "✅ Tasdiqlash", callback_data: "confirm_ad" },
-            { text: "❌ Bekor qilish", callback_data: "cancel_ad" },
-          ],
-        ],
-      },
-    });
-  }
 }
 
 console.log("🤖 Bot ishga tushdi!");
