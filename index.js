@@ -146,6 +146,7 @@ const userStates = {
   awaitingPhoneNumber: {},
   postingType: {},
   selectedTariff: {},
+  awaitingLinkTitle: {},
 };
 
 // Statistics tracking
@@ -172,6 +173,16 @@ const steps = [
     required: false,
     example: "Email yoki Telefon raqamini kiriting",
   },
+  {
+    label: "🔗 Havola sarlavhasi",
+    required: false,
+    example: "Batafsil ma'lumot",
+  },
+  {
+    label: "🔗 Havola URL",
+    required: false,
+    example: "https://example.com/vacancy",
+  },
   { label: "📍 Hudud", required: false, example: "Toshkent, O'zbekiston" },
   { label: "👨‍💼 Mas'ul", required: false, example: "2-3 yil tajriba" },
   { label: "🕒 Ish vaqti", required: false, example: "5/2 - 8 soat" },
@@ -179,11 +190,6 @@ const steps = [
     label: "📝 Batafsil",
     required: false,
     example: "GraphQL bilan ishlash tajribasi afzal",
-  },
-  {
-    label: "🔗 Havola qo'shish",
-    required: false,
-    example: "Batafsil ma'lumot",
   },
 ];
 
@@ -344,10 +350,10 @@ function formatVacancyText(vacancyDetails, techTags, categoryText) {
     { step: 3, label: "Texnologiya" },
     { step: 4, label: "Telegram" },
     { step: 5, label: "Aloqa" },
-    { step: 6, label: "Hudud" },
-    { step: 7, label: "Mas'ul" },
-    { step: 8, label: "Ish vaqti" },
-    { step: 9, label: "Batafsil" },
+    { step: 8, label: "Hudud" },
+    { step: 9, label: "Mas'ul" },
+    { step: 10, label: "Ish vaqti" },
+    { step: 11, label: "Batafsil" },
   ];
 
   optionalFields.forEach((field) => {
@@ -357,17 +363,17 @@ function formatVacancyText(vacancyDetails, techTags, categoryText) {
     }
   });
 
-  // Handle Havola qo'shish (Add Link) field specially for links
-  const havolaValue = vacancyDetails[steps[10].label];
-  const havolaLink = vacancyDetails["havola_link"];
+  // Handle Havola sarlavhasi and Havola URL fields specially for links (steps 6 and 7)
+  const havolaTitle = vacancyDetails[steps[6].label];
+  const havolaUrl = vacancyDetails[steps[7].label];
 
-  if (havolaValue && havolaValue !== "-" && havolaValue.trim() !== "") {
-    if (havolaLink && havolaLink !== "-" && havolaLink.trim() !== "") {
-      // If both title and link are provided, create a clickable link
-      vacancyText += `\n— <b>Havola:</b> <a href="${havolaLink}">${havolaValue}</a>`;
+  if (havolaTitle && havolaTitle !== "-" && havolaTitle.trim() !== "") {
+    if (havolaUrl && havolaUrl !== "-" && havolaUrl.trim() !== "") {
+      // If both title and URL are provided, create a clickable link
+      vacancyText += `\n— <b>Havola:</b> <a href="${havolaUrl}">${havolaTitle}</a>`;
     } else {
       // If only title is provided, show as regular text
-      vacancyText += `\n— <b>Havola:</b> ${havolaValue}`;
+      vacancyText += `\n— <b>Havola:</b> ${havolaTitle}`;
     }
   }
 
@@ -1108,14 +1114,7 @@ async function handlePostConfirmation(chatId, callbackQuery) {
     delete userStates.awaitingVacancy[chatId];
     delete userStates.awaitingContactTitle[chatId];
     delete userStates.editingStep[chatId];
-
-    await bot.editMessageReplyMarkup(
-      { inline_keyboard: [] },
-      {
-        chat_id: chatId,
-        message_id: messageId,
-      }
-    );
+    delete userStates.awaitingLinkTitle[chatId];
   } catch (error) {
     console.error("Post confirmation error:", error);
     throw error;
@@ -1128,6 +1127,7 @@ async function handlePostCancellation(chatId, callbackQuery) {
     delete userStates.userSelection[chatId];
     delete userStates.awaitingContactTitle[chatId];
     delete userStates.editingStep[chatId];
+    delete userStates.awaitingLinkTitle[chatId];
 
     await bot.sendMessage(chatId, "❌ E'lon yaratish bekor qilindi.", {
       reply_markup: {
@@ -1137,6 +1137,7 @@ async function handlePostCancellation(chatId, callbackQuery) {
         ],
       },
     });
+
     await bot.editMessageReplyMarkup(
       { inline_keyboard: [] },
       {
@@ -1153,6 +1154,23 @@ async function handlePostCancellation(chatId, callbackQuery) {
 async function handleSkip(chatId) {
   const currentStep = userStates.awaitingVacancy[chatId].step;
   const step = steps[currentStep];
+
+  // Special handling for link title step - skip both title and URL
+  if (step.label === "🔗 Havola sarlavhasi") {
+    userStates.awaitingVacancy[chatId].data[step.label] = "-";
+    userStates.awaitingVacancy[chatId].data[steps[7].label] = "-"; // Skip URL step too
+    userStates.awaitingVacancy[chatId].step += 2; // Skip both steps
+    await handleNextStep(chatId);
+    return;
+  }
+
+  // Special handling for link URL step - skip only URL
+  if (step.label === "🔗 Havola URL") {
+    userStates.awaitingVacancy[chatId].data[step.label] = "-";
+    userStates.awaitingVacancy[chatId].step++;
+    await handleNextStep(chatId);
+    return;
+  }
 
   userStates.awaitingVacancy[chatId].data[step.label] = "-";
   userStates.awaitingVacancy[chatId].step++;
@@ -1245,6 +1263,7 @@ async function handleVacancyInput(chatId, msg) {
     processedValue = validateTelegramUsername(msg.text);
   }
 
+  // Handle all steps normally - no special handling needed for link steps
   userStates.awaitingVacancy[chatId].data[step.label] =
     escapeHTML(processedValue);
   userStates.awaitingVacancy[chatId].step++;
@@ -1262,6 +1281,7 @@ function cleanup(chatId) {
   delete userStates.awaitingPhoneNumber[chatId];
   delete userStates.postingType[chatId];
   delete userStates.selectedTariff[chatId];
+  delete userStates.awaitingLinkTitle[chatId];
 }
 
 async function handleCallbackError(callbackQuery, error) {
