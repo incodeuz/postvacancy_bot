@@ -12,9 +12,53 @@ const port = process.env.PORT ? parseInt(process.env.PORT) : 7777;
 console.log(`🔧 Using port: ${port} (from env: ${process.env.PORT})`);
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
-const bot = new TelegramBot(token, { polling: true });
+// Improved bot configuration with better error handling
+const bot = new TelegramBot(token, {
+  polling: {
+    timeout: 30,
+    limit: 100,
+    retryTimeout: 5000,
+    autoStart: false,
+  },
+  request: {
+    timeout: 30000,
+    connectTimeout: 30000,
+    readTimeout: 30000,
+  },
+});
 
-// Bot error handling
+// Connection retry logic
+let retryCount = 0;
+const maxRetries = 5;
+const retryDelay = 10000; // 10 seconds
+
+async function startBot() {
+  try {
+    console.log("🤖 Bot ishga tushmoqda...");
+    await bot.startPolling();
+    console.log("✅ Bot muvaffaqiyatli ishga tushdi!");
+    retryCount = 0; // Reset retry count on success
+  } catch (error) {
+    console.error("❌ Bot ishga tushirishda xatolik:", error);
+    retryCount++;
+
+    if (retryCount < maxRetries) {
+      console.log(
+        `🔄 ${
+          retryDelay / 1000
+        } soniyadan keyin qayta urinish (${retryCount}/${maxRetries})...`
+      );
+      setTimeout(startBot, retryDelay);
+    } else {
+      console.error(
+        "❌ Maksimal urinishlar soniga yetildi. Bot ishga tushmadi."
+      );
+      process.exit(1);
+    }
+  }
+}
+
+// Bot error handling with improved logging
 bot.on("error", (error) => {
   console.error("🚫 Telegram Bot error:", error);
 
@@ -28,6 +72,27 @@ bot.on("error", (error) => {
     console.log(
       "ℹ️ Phone number request attempted in non-private chat - this is expected behavior"
     );
+    return;
+  }
+
+  // Handle network errors
+  if (
+    error.code === "ETIMEDOUT" ||
+    error.code === "ECONNRESET" ||
+    error.code === "ENOTFOUND"
+  ) {
+    console.error("🌐 Tarmoq xatoligi:", error.message);
+    console.log("🔄 Bot qayta ishga tushirilmoqda...");
+    setTimeout(() => {
+      bot
+        .stopPolling()
+        .then(() => {
+          startBot();
+        })
+        .catch((err) => {
+          console.error("❌ Bot to'xtatishda xatolik:", err);
+        });
+    }, 5000);
   }
 });
 
@@ -44,13 +109,44 @@ bot.on("polling_error", (error) => {
     console.log(
       "ℹ️ Phone number request attempted in non-private chat - this is expected behavior"
     );
+    return;
+  }
+
+  // Handle network errors
+  if (
+    error.code === "ETIMEDOUT" ||
+    error.code === "ECONNRESET" ||
+    error.code === "ENOTFOUND"
+  ) {
+    console.error("🌐 Tarmoq xatoligi:", error.message);
+    console.log("🔄 Bot qayta ishga tushirilmoqda...");
+    setTimeout(() => {
+      bot
+        .stopPolling()
+        .then(() => {
+          startBot();
+        })
+        .catch((err) => {
+          console.error("❌ Bot to'xtatishda xatolik:", err);
+        });
+    }, 5000);
   }
 });
 
-// MongoDB connection
+// MongoDB connection with improved error handling
 mongoose.connect(
   process.env.MONGODB_URI ||
-    "mongodb+srv://qiyomovabdulloh3:postvacancy_bot@cluster0.h5ujkjt.mongodb.net/postvacancy_bot"
+    "mongodb+srv://qiyomovabdulloh3:postvacancy_bot@cluster0.h5ujkjt.mongodb.net/postvacancy_bot",
+  {
+    serverSelectionTimeoutMS: 30000,
+    socketTimeoutMS: 45000,
+    connectTimeoutMS: 30000,
+    maxPoolSize: 10,
+    minPoolSize: 1,
+    maxIdleTimeMS: 30000,
+    retryWrites: true,
+    retryReads: true,
+  }
 );
 
 // MongoDB connection events
@@ -1803,7 +1899,6 @@ async function handleEditInput(chatId, msg) {
   await bot.sendMessage(chatId, "✏️ Edit funksiyasi hozircha mavjud emas.");
 }
 
-console.log("🤖 Bot ishga tushdi!");
 console.log("⏰ Scheduler o'rnatildi: reklama tekshiruvi har soat");
 
 // Express server setup
@@ -1816,6 +1911,8 @@ let server;
 try {
   server = app.listen(port, () => {
     console.log(`🚀 Server is running on port ${port}`);
+    // Start bot after server is running
+    startBot();
   });
 } catch (error) {
   console.error("❌ Failed to start server:", error);
@@ -1836,35 +1933,50 @@ if (server) {
   });
 }
 
-// Graceful shutdown
-process.on("SIGINT", () => {
-  console.log("\n🛑 Received SIGINT. Graceful shutdown...");
-  if (server) {
-    server.close(() => {
-      console.log("✅ HTTP server closed.");
-      mongoose.connection.close();
-      console.log("✅ MongoDB connection closed.");
-      process.exit(0);
-    });
-  } else {
-    mongoose.connection.close();
-    console.log("✅ MongoDB connection closed.");
-    process.exit(0);
-  }
+// Health check endpoint
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    bot: bot.isPolling(),
+    mongodb: mongoose.connection.readyState === 1,
+    timestamp: new Date().toISOString(),
+  });
 });
 
-process.on("SIGTERM", () => {
-  console.log("\n🛑 Received SIGTERM. Graceful shutdown...");
-  if (server) {
-    server.close(() => {
-      console.log("✅ HTTP server closed.");
-      mongoose.connection.close();
+// Graceful shutdown
+async function gracefulShutdown(signal) {
+  console.log(`\n🛑 Received ${signal}. Graceful shutdown...`);
+
+  try {
+    // Stop bot polling
+    if (bot.isPolling()) {
+      await bot.stopPolling();
+      console.log("✅ Bot polling stopped.");
+    }
+
+    // Close server
+    if (server) {
+      await new Promise((resolve) => {
+        server.close(() => {
+          console.log("✅ HTTP server closed.");
+          resolve();
+        });
+      });
+    }
+
+    // Close MongoDB connection
+    if (mongoose.connection.readyState === 1) {
+      await mongoose.connection.close();
       console.log("✅ MongoDB connection closed.");
-      process.exit(0);
-    });
-  } else {
-    mongoose.connection.close();
-    console.log("✅ MongoDB connection closed.");
+    }
+
+    console.log("✅ Graceful shutdown completed.");
     process.exit(0);
+  } catch (error) {
+    console.error("❌ Error during graceful shutdown:", error);
+    process.exit(1);
   }
-});
+}
+
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
