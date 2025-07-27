@@ -401,7 +401,7 @@ const steps = [
     example: "https://example.com/vacancy",
   },
   { label: "📍 Hudud", required: false, example: "Toshkent, O'zbekiston" },
-
+  { label: "👨‍💼 Tajriba", required: false, example: "2-3 yil tajriba" },
   { label: "🕒 Ish vaqti", required: false, example: "5/2 - 8 soat" },
   {
     label: "📝 Batafsil",
@@ -1213,6 +1213,14 @@ bot.on("callback_query", async (callbackQuery) => {
       await handleServiceConfirmation(chatId, callbackQuery);
     } else if (data === "cancel_service_post") {
       await handleServiceCancellation(chatId, callbackQuery);
+    } else if (data.startsWith("edit_step_")) {
+      await handleEditStep(chatId, data, callbackQuery);
+    } else if (data === "cancel_edit") {
+      delete userStates.editingStep[chatId];
+      await bot.sendMessage(chatId, "❌ Tahrirlash bekor qilindi.");
+      await showVacancyPreview(chatId);
+    } else if (data === "show_preview") {
+      await showVacancyPreview(chatId);
     }
   } catch (error) {
     console.error("Callback query error:", error);
@@ -1487,8 +1495,19 @@ async function handlePostCancellation(chatId, callbackQuery) {
 }
 
 async function handleSkip(chatId) {
-  const currentStep = userStates.awaitingVacancy[chatId].step;
+  const currentState = userStates.awaitingVacancy[chatId];
+  if (!currentState) {
+    await bot.sendMessage(chatId, "❌ Vakansiya yaratish jarayoni topilmadi.");
+    return;
+  }
+
+  const currentStep = currentState.step;
   const step = steps[currentStep];
+
+  if (!step) {
+    await bot.sendMessage(chatId, "❌ Step topilmadi.");
+    return;
+  }
 
   // Check if step is required
   if (step.required) {
@@ -1523,6 +1542,7 @@ async function handleSkip(chatId) {
     return;
   }
 
+  // Regular skip
   userStates.awaitingVacancy[chatId].data[step.label] = "-";
   userStates.awaitingVacancy[chatId].step++;
   await handleNextStep(chatId);
@@ -1580,10 +1600,26 @@ async function showVacancyPreview(chatId) {
   const categoryText = getCategoryText(category);
   const vacancyText = formatVacancyText(vacancyDetails, techTags, categoryText);
 
+  // Create edit buttons for each step
+  const editButtons = [];
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const value = vacancyDetails[step.label] || "-";
+    const shortValue =
+      value.length > 20 ? value.substring(0, 20) + "..." : value;
+    editButtons.push([
+      {
+        text: `✏️ ${step.label.split(" ")[1]}: ${shortValue}`,
+        callback_data: `edit_step_${i}`,
+      },
+    ]);
+  }
+
   await bot.sendMessage(chatId, "📝 E'loningiz ko'rinishi:\n\n" + vacancyText, {
     parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [
+        ...editButtons,
         [
           { text: "✅ Tasdiqlash", callback_data: "confirm_post" },
           { text: "❌ Bekor qilish", callback_data: "cancel_post" },
@@ -2915,9 +2951,147 @@ async function handleServiceCancellation(chatId, callbackQuery) {
   await bot.sendMessage(chatId, "❌ Xizmat joylash bekor qilindi.");
 }
 
+async function handleEditStep(chatId, data, callbackQuery) {
+  const stepIndex = parseInt(data.split("_")[2]);
+  const step = steps[stepIndex];
+
+  if (!step) {
+    await bot.sendMessage(chatId, "❌ Xatolik: step topilmadi.");
+    return;
+  }
+
+  userStates.editingStep[chatId] = stepIndex;
+
+  const currentValue =
+    userStates.awaitingVacancy[chatId].data[step.label] || "-";
+
+  await bot.sendMessage(
+    chatId,
+    `✏️ ${step.label} ni tahrirlash:\n\nHozirgi qiymat: ${currentValue}\n\nYangi qiymatni kiriting:`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "❌ Bekor qilish", callback_data: "cancel_edit" }],
+        ],
+      },
+    }
+  );
+}
+
 async function handleEditInput(chatId, msg) {
-  // Stub for edit functionality
-  await bot.sendMessage(chatId, "✏️ Edit funksiyasi hozircha mavjud emas.");
+  const stepIndex = userStates.editingStep[chatId];
+  if (stepIndex === undefined) return;
+
+  const step = steps[stepIndex];
+  const inputText = msg.text.trim();
+
+  // Validate input
+  if (!inputText || inputText.length === 0) {
+    await bot.sendMessage(
+      chatId,
+      "⚠️ Iltimos, ma'lumot kiriting! Bo'sh xabar yuborish mumkin emas.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "❌ Bekor qilish", callback_data: "cancel_edit" }],
+          ],
+        },
+      }
+    );
+    return;
+  }
+
+  if (inputText.length > 500) {
+    await bot.sendMessage(
+      chatId,
+      "⚠️ Xabar juda uzun! Iltimos, 500 belgidan kamroq kiriting.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "❌ Bekor qilish", callback_data: "cancel_edit" }],
+          ],
+        },
+      }
+    );
+    return;
+  }
+
+  let processedValue = inputText;
+
+  // Validate specific fields
+  if (step.label.includes("Telegram")) {
+    processedValue = validateTelegramUsername(inputText);
+    if (processedValue === "invalid") {
+      await bot.sendMessage(
+        chatId,
+        "⚠️ Noto'g'ri Telegram username! Iltimos, to'g'ri formatda kiriting (masalan: @username yoki username)",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "❌ Bekor qilish", callback_data: "cancel_edit" }],
+            ],
+          },
+        }
+      );
+      return;
+    }
+  }
+
+  if (step.label.includes("Aloqa") && inputText.includes("+998")) {
+    const phoneValidation = validatePhoneNumber(inputText);
+    if (phoneValidation === "invalid") {
+      await bot.sendMessage(
+        chatId,
+        "⚠️ Noto'g'ri telefon raqam! Iltimos, to'g'ri formatda kiriting (masalan: +998 90 123 45 67)",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "❌ Bekor qilish", callback_data: "cancel_edit" }],
+            ],
+          },
+        }
+      );
+      return;
+    }
+  }
+
+  if (step.label.includes("Havola URL") && inputText !== "-") {
+    try {
+      new URL(inputText);
+    } catch (error) {
+      await bot.sendMessage(
+        chatId,
+        "⚠️ Noto'g'ri URL! Iltimos, to'g'ri havola kiriting (masalan: https://example.com)",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "❌ Bekor qilish", callback_data: "cancel_edit" }],
+            ],
+          },
+        }
+      );
+      return;
+    }
+  }
+
+  // Save the edited value
+  userStates.awaitingVacancy[chatId].data[step.label] =
+    escapeHTML(processedValue);
+  delete userStates.editingStep[chatId];
+
+  await bot.sendMessage(
+    chatId,
+    `✅ ${step.label} muvaffaqiyatli o'zgartirildi!`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📝 Preview ko'rish", callback_data: "show_preview" }],
+        ],
+      },
+    }
+  );
 }
 
 console.log("✅ Bot tayyor - scheduler o'chirildi");
