@@ -383,7 +383,7 @@ const steps = [
     required: false,
     example: "Flutter, Dart, Firebase",
   },
-  { label: "👨 Tajriba", required: false, example: "2-3 yil tajriba" },
+
   { label: "📧 Telegram", required: false, example: "@JohnDoe" },
   {
     label: "🔗 Aloqa",
@@ -1509,6 +1509,8 @@ async function handleSkip(chatId) {
     return;
   }
 
+  console.log(`🔄 Skip qilish: ${step.label}, required: ${step.required}`);
+
   // Check if step is required
   if (step.required) {
     await bot.sendMessage(
@@ -1530,6 +1532,9 @@ async function handleSkip(chatId) {
     userStates.awaitingVacancy[chatId].data[step.label] = "-";
     userStates.awaitingVacancy[chatId].data[steps[7].label] = "-"; // Skip URL step too
     userStates.awaitingVacancy[chatId].step += 2; // Skip both steps
+    console.log(
+      `⏩ Havola sarlavhasi va URL skip qilindi, keyingi step: ${userStates.awaitingVacancy[chatId].step}`
+    );
     await handleNextStep(chatId);
     return;
   }
@@ -1538,6 +1543,9 @@ async function handleSkip(chatId) {
   if (step.label === "🔗 Havola URL") {
     userStates.awaitingVacancy[chatId].data[step.label] = "-";
     userStates.awaitingVacancy[chatId].step++;
+    console.log(
+      `⏩ Havola URL skip qilindi, keyingi step: ${userStates.awaitingVacancy[chatId].step}`
+    );
     await handleNextStep(chatId);
     return;
   }
@@ -1545,6 +1553,9 @@ async function handleSkip(chatId) {
   // Regular skip
   userStates.awaitingVacancy[chatId].data[step.label] = "-";
   userStates.awaitingVacancy[chatId].step++;
+  console.log(
+    `⏩ ${step.label} skip qilindi, keyingi step: ${userStates.awaitingVacancy[chatId].step}`
+  );
   await handleNextStep(chatId);
 }
 
@@ -1607,9 +1618,10 @@ async function showVacancyPreview(chatId) {
     const value = vacancyDetails[step.label] || "-";
     const shortValue =
       value.length > 20 ? value.substring(0, 20) + "..." : value;
+    const stepName = step.label.split(" ").slice(1).join(" "); // Remove emoji
     editButtons.push([
       {
-        text: `✏️ ${step.label.split(" ")[1]}: ${shortValue}`,
+        text: `✏️ ${stepName}: ${shortValue}`,
         callback_data: `edit_step_${i}`,
       },
     ]);
