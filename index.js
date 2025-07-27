@@ -383,6 +383,7 @@ const steps = [
     required: false,
     example: "Flutter, Dart, Firebase",
   },
+  { label: "👨 Tajriba", required: false, example: "2-3 yil tajriba" },
   { label: "📧 Telegram", required: false, example: "@JohnDoe" },
   {
     label: "🔗 Aloqa",
@@ -400,7 +401,7 @@ const steps = [
     example: "https://example.com/vacancy",
   },
   { label: "📍 Hudud", required: false, example: "Toshkent, O'zbekiston" },
-  { label: "👨‍💼 Mas'ul", required: false, example: "2-3 yil tajriba" },
+
   { label: "🕒 Ish vaqti", required: false, example: "5/2 - 8 soat" },
   {
     label: "📝 Batafsil",
@@ -595,7 +596,7 @@ function formatVacancyText(vacancyDetails, techTags, categoryText) {
     { step: 4, label: "Telegram" },
     { step: 5, label: "Aloqa" },
     { step: 8, label: "Hudud" },
-    { step: 9, label: "Mas'ul" },
+    { step: 9, label: "Tajriba" },
     { step: 10, label: "Ish vaqti" },
     { step: 11, label: "Batafsil" },
   ];
