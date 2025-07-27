@@ -15,22 +15,29 @@ const token = process.env.TELEGRAM_BOT_TOKEN;
 // Improved bot configuration with better error handling
 const bot = new TelegramBot(token, {
   polling: {
-    timeout: 30,
+    timeout: 60, // Increased from 30 to 60 seconds
     limit: 100,
-    retryTimeout: 5000,
+    retryTimeout: 10000, // Increased from 5000 to 10000 ms
     autoStart: false,
+    params: {
+      timeout: 60, // Additional timeout parameter
+    },
   },
   request: {
-    timeout: 30000,
-    connectTimeout: 30000,
-    readTimeout: 30000,
+    timeout: 60000, // Increased from 30000 to 60000 ms
+    connectTimeout: 60000, // Increased from 30000 to 60000 ms
+    readTimeout: 60000, // Increased from 30000 to 60000 ms
+    keepAlive: true, // Enable keep-alive
+    keepAliveMsecs: 1000, // Keep-alive interval
+    maxSockets: 50, // Maximum number of sockets
+    maxFreeSockets: 10, // Maximum number of free sockets
   },
 });
 
-// Connection retry logic
+// Connection retry logic with exponential backoff
 let retryCount = 0;
-const maxRetries = 5;
-const retryDelay = 10000; // 10 seconds
+const maxRetries = 10; // Increased from 5 to 10
+const baseRetryDelay = 5000; // Base delay of 5 seconds
 
 async function startBot() {
   try {
@@ -43,22 +50,32 @@ async function startBot() {
     retryCount++;
 
     if (retryCount < maxRetries) {
+      // Exponential backoff: 5s, 10s, 20s, 40s, 80s, etc.
+      const retryDelay = Math.min(
+        baseRetryDelay * Math.pow(2, retryCount - 1),
+        300000
+      ); // Max 5 minutes
       console.log(
-        `🔄 ${
+        `🔄 ${Math.round(
           retryDelay / 1000
-        } soniyadan keyin qayta urinish (${retryCount}/${maxRetries})...`
+        )} soniyadan keyin qayta urinish (${retryCount}/${maxRetries})...`
       );
       setTimeout(startBot, retryDelay);
     } else {
       console.error(
         "❌ Maksimal urinishlar soniga yetildi. Bot ishga tushmadi."
       );
-      process.exit(1);
+      // Don't exit process, just log the error and keep trying
+      console.log("🔄 5 daqiqadan keyin qayta urinish...");
+      setTimeout(() => {
+        retryCount = 0; // Reset retry count
+        startBot();
+      }, 300000); // 5 minutes
     }
   }
 }
 
-// Bot error handling with improved logging
+// Enhanced error handling with specific timeout error handling
 bot.on("error", (error) => {
   console.error("🚫 Telegram Bot error:", error);
 
@@ -75,24 +92,37 @@ bot.on("error", (error) => {
     return;
   }
 
-  // Handle network errors
+  // Handle network errors with specific timeout handling
   if (
     error.code === "ETIMEDOUT" ||
     error.code === "ECONNRESET" ||
-    error.code === "ENOTFOUND"
+    error.code === "ENOTFOUND" ||
+    error.code === "ESOCKETTIMEDOUT" ||
+    error.message?.includes("timeout") ||
+    error.message?.includes("socket")
   ) {
     console.error("🌐 Tarmoq xatoligi:", error.message);
     console.log("🔄 Bot qayta ishga tushirilmoqda...");
-    setTimeout(() => {
-      bot
-        .stopPolling()
-        .then(() => {
+
+    // Add delay before restarting to avoid rapid restarts
+    setTimeout(async () => {
+      try {
+        if (bot.isPolling()) {
+          await bot.stopPolling();
+          console.log("✅ Bot polling to'xtatildi");
+        }
+        // Wait a bit more before restarting
+        setTimeout(() => {
           startBot();
-        })
-        .catch((err) => {
-          console.error("❌ Bot to'xtatishda xatolik:", err);
-        });
-    }, 5000);
+        }, 2000);
+      } catch (err) {
+        console.error("❌ Bot to'xtatishda xatolik:", err);
+        // Force restart after delay
+        setTimeout(() => {
+          startBot();
+        }, 5000);
+      }
+    }, 3000);
   }
 });
 
@@ -112,55 +142,111 @@ bot.on("polling_error", (error) => {
     return;
   }
 
-  // Handle network errors
+  // Handle network errors with specific timeout handling
   if (
     error.code === "ETIMEDOUT" ||
     error.code === "ECONNRESET" ||
-    error.code === "ENOTFOUND"
+    error.code === "ENOTFOUND" ||
+    error.code === "ESOCKETTIMEDOUT" ||
+    error.message?.includes("timeout") ||
+    error.message?.includes("socket")
   ) {
     console.error("🌐 Tarmoq xatoligi:", error.message);
     console.log("🔄 Bot qayta ishga tushirilmoqda...");
-    setTimeout(() => {
-      bot
-        .stopPolling()
-        .then(() => {
+
+    // Add delay before restarting to avoid rapid restarts
+    setTimeout(async () => {
+      try {
+        if (bot.isPolling()) {
+          await bot.stopPolling();
+          console.log("✅ Bot polling to'xtatildi");
+        }
+        // Wait a bit more before restarting
+        setTimeout(() => {
           startBot();
-        })
-        .catch((err) => {
-          console.error("❌ Bot to'xtatishda xatolik:", err);
-        });
-    }, 5000);
+        }, 2000);
+      } catch (err) {
+        console.error("❌ Bot to'xtatishda xatolik:", err);
+        // Force restart after delay
+        setTimeout(() => {
+          startBot();
+        }, 5000);
+      }
+    }, 3000);
   }
 });
 
-// MongoDB connection with improved error handling
-mongoose.connect(
-  process.env.MONGODB_URI ||
-    "mongodb+srv://qiyomovabdulloh3:postvacancy_bot@cluster0.h5ujkjt.mongodb.net/postvacancy_bot",
-  {
-    serverSelectionTimeoutMS: 30000,
-    socketTimeoutMS: 45000,
-    connectTimeoutMS: 30000,
-    maxPoolSize: 10,
-    minPoolSize: 1,
-    maxIdleTimeMS: 30000,
-    retryWrites: true,
-    retryReads: true,
-  }
-);
+// MongoDB connection with improved error handling and reconnection logic
+const mongoOptions = {
+  serverSelectionTimeoutMS: 60000, // Increased from 30000
+  socketTimeoutMS: 60000, // Increased from 45000
+  connectTimeoutMS: 60000, // Increased from 30000
+  maxPoolSize: 20, // Increased from 10
+  minPoolSize: 2, // Increased from 1
+  maxIdleTimeMS: 60000, // Increased from 30000
+  retryWrites: true,
+  retryReads: true,
+  heartbeatFrequencyMS: 10000, // Heartbeat frequency
+  bufferMaxEntries: 0, // Disable mongoose buffering
+  bufferCommands: false, // Disable mongoose buffering
+};
 
-// MongoDB connection events
+async function connectToMongoDB() {
+  try {
+    await mongoose.connect(
+      process.env.MONGODB_URI ||
+        "mongodb+srv://qiyomovabdulloh3:postvacancy_bot@cluster0.h5ujkjt.mongodb.net/postvacancy_bot",
+      mongoOptions
+    );
+    console.log("✅ MongoDB connected successfully");
+  } catch (error) {
+    console.error("❌ MongoDB connection error:", error);
+    // Retry connection after 5 seconds
+    setTimeout(connectToMongoDB, 5000);
+  }
+}
+
+// Initial MongoDB connection
+connectToMongoDB();
+
+// MongoDB connection events with reconnection logic
 mongoose.connection.on("connected", () => {
   console.log("✅ MongoDB connected successfully");
 });
 
 mongoose.connection.on("error", (err) => {
   console.error("❌ MongoDB connection error:", err);
+  // Attempt to reconnect after error
+  setTimeout(connectToMongoDB, 5000);
 });
 
 mongoose.connection.on("disconnected", () => {
-  console.log("⚠️ MongoDB disconnected");
+  console.log("⚠️ MongoDB disconnected - attempting to reconnect...");
+  // Attempt to reconnect after disconnection
+  setTimeout(connectToMongoDB, 5000);
 });
+
+// Periodic health check for bot and database
+setInterval(() => {
+  const botStatus = bot.isPolling();
+  const dbStatus = mongoose.connection.readyState === 1;
+
+  if (!botStatus) {
+    console.log("⚠️ Bot polling stopped - attempting to restart...");
+    startBot();
+  }
+
+  if (!dbStatus) {
+    console.log("⚠️ Database connection lost - attempting to reconnect...");
+    connectToMongoDB();
+  }
+
+  console.log(
+    `🔍 Health check - Bot: ${botStatus ? "✅" : "❌"}, DB: ${
+      dbStatus ? "✅" : "❌"
+    }`
+  );
+}, 60000); // Check every minute
 
 // User Schema
 const userSchema = new mongoose.Schema({
@@ -361,6 +447,30 @@ function escapeHTML(text) {
     .replace(/>/g, ">")
     .replace(/"/g, `"`)
     .replace(/'/g, "'");
+}
+
+// Safe bot API wrapper with timeout and retry logic
+async function safeBotCall(apiCall, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await Promise.race([
+        apiCall(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("API timeout")), 30000)
+        ),
+      ]);
+    } catch (error) {
+      console.error(`Bot API call attempt ${attempt} failed:`, error.message);
+
+      if (attempt === maxRetries) {
+        throw error;
+      }
+
+      // Wait before retry with exponential backoff
+      const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
 }
 
 function formatTechnologies(techString) {
@@ -632,9 +742,11 @@ bot.onText(/\/start/, async (msg) => {
 
   // Check if this is a private chat
   if (chatType !== "private") {
-    bot.sendMessage(
-      chatId,
-      "⚠️ Bu bot faqat shaxsiy xabarlarda ishlaydi. Iltimos, bot bilan to'g'ridan-to'g'ri xabar yozing: @ayti_jobs_bot"
+    await safeBotCall(() =>
+      bot.sendMessage(
+        chatId,
+        "⚠️ Bu bot faqat shaxsiy xabarlarda ishlaydi. Iltimos, bot bilan to'g'ridan-to'g'ri xabar yozing: @ayti_jobs_bot"
+      )
     );
     return;
   }
@@ -647,51 +759,62 @@ bot.onText(/\/start/, async (msg) => {
 
     if (existingUser) {
       // User already registered
-      bot.sendMessage(
-        chatId,
-        "👋 Xush kelibsiz, Ayti - IT Jobs Bot!\n\nQuyidagi variantlardan birini tanlang:",
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "💼 Vakansiya joylash (BEPUL)",
-                  callback_data: "post_vacancy",
-                },
+      await safeBotCall(() =>
+        bot.sendMessage(
+          chatId,
+          "👋 Xush kelibsiz, Ayti - IT Jobs Bot!\n\nQuyidagi variantlardan birini tanlang:",
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: "💼 Vakansiya joylash (BEPUL)",
+                    callback_data: "post_vacancy",
+                  },
+                ],
+                [
+                  {
+                    text: "⚙️ Xizmat joylash (PULLIK)",
+                    callback_data: "post_service",
+                  },
+                ],
+                [{ text: "❓ Yordam", callback_data: "help" }],
               ],
-              [
-                {
-                  text: "⚙️ Xizmat joylash (PULLIK)",
-                  callback_data: "post_service",
-                },
-              ],
-              [{ text: "❓ Yordam", callback_data: "help" }],
-            ],
-          },
-        }
+            },
+          }
+        )
       );
     } else {
       // Request phone number
       userStates.awaitingPhoneNumber[chatId] = true;
-      bot.sendMessage(
-        chatId,
-        "👋 Xush kelibsiz!\n\nBotdan foydalanish uchun telefon raqamingizni yuboring:",
-        {
-          reply_markup: {
-            keyboard: [
-              [{ text: "📱 Telefon raqamni yuborish", request_contact: true }],
-            ],
-            resize_keyboard: true,
-            one_time_keyboard: true,
-          },
-        }
+      await safeBotCall(() =>
+        bot.sendMessage(
+          chatId,
+          "👋 Xush kelibsiz!\n\nBotdan foydalanish uchun telefon raqamingizni yuboring:",
+          {
+            reply_markup: {
+              keyboard: [
+                [
+                  {
+                    text: "📱 Telefon raqamni yuborish",
+                    request_contact: true,
+                  },
+                ],
+              ],
+              resize_keyboard: true,
+              one_time_keyboard: true,
+            },
+          }
+        )
       );
     }
   } catch (error) {
     console.error("Error in /start command:", error);
-    bot.sendMessage(
-      chatId,
-      "❌ Xatolik yuz berdi. Iltimos, qayta urinib ko'ring."
+    await safeBotCall(() =>
+      bot.sendMessage(
+        chatId,
+        "❌ Xatolik yuz berdi. Iltimos, qayta urinib ko'ring."
+      )
     );
   }
 });
