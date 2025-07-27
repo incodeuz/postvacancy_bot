@@ -568,10 +568,14 @@ function validatePhoneNumber(phone) {
     return phone;
   }
 
-  return cleanedPhone.replace(
+  // Validate Uzbek phone number format
+  const phoneRegex = /^\+998\s\d{2}\s\d{3}\s\d{2}\s\d{2}$/;
+  const formattedPhone = cleanedPhone.replace(
     /^(\+998)(\d{2})(\d{3})(\d{2})(\d{2})$/,
     "$1 $2 $3 $4 $5"
   );
+
+  return phoneRegex.test(formattedPhone) ? formattedPhone : "invalid";
 }
 
 function validateTelegramUsername(username) {
@@ -583,7 +587,7 @@ function validateTelegramUsername(username) {
   }
 
   const usernameRegex = /^@[a-zA-Z0-9_]{5,32}$/;
-  return usernameRegex.test(cleanedUsername) ? cleanedUsername : username;
+  return usernameRegex.test(cleanedUsername) ? cleanedUsername : "invalid";
 }
 
 function formatVacancyText(vacancyDetails, techTags, categoryText) {
@@ -1154,6 +1158,37 @@ bot.on("callback_query", async (callbackQuery) => {
       return;
     }
 
+    // Check if user is in active step process
+    const isInVacancyProcess = userStates.awaitingVacancy[chatId];
+    const isInServiceProcess = userStates.awaitingService[chatId];
+    const isAwaitingPhone = userStates.awaitingPhoneNumber[chatId];
+
+    // If user is in active process, only allow specific actions
+    if (isInVacancyProcess || isInServiceProcess || isAwaitingPhone) {
+      // Only allow cancel actions during active process
+      if (
+        data === "cancel_post" ||
+        data === "cancel_service" ||
+        data === "cancel_service_post"
+      ) {
+        if (data === "cancel_post") {
+          await handlePostCancellation(chatId, callbackQuery);
+        } else if (data === "cancel_service") {
+          await handleCancelService(chatId);
+        } else if (data === "cancel_service_post") {
+          await handleServiceCancellation(chatId, callbackQuery);
+        }
+        return;
+      }
+
+      // Block all other actions during active process
+      await bot.answerCallbackQuery(callbackQuery.id, {
+        text: "⚠️ Avval joriy jarayonni tugatishingiz kerak!",
+        show_alert: true,
+      });
+      return;
+    }
+
     // Handle button clicks
     if (data === "post_vacancy") {
       userStates.postingType[chatId] = "vacancy";
@@ -1366,33 +1401,49 @@ bot.on("message", async (msg) => {
     return;
   }
 
-  try {
-    if (userStates.editingStep[chatId] !== undefined) {
-      stats.users.add(chatId);
-      await handleEditInput(chatId, msg);
-    } else if (userStates.awaitingVacancy[chatId]) {
-      stats.users.add(chatId);
-      await handleVacancyInput(chatId, msg);
-    } else if (userStates.awaitingService[chatId]) {
-      stats.users.add(chatId);
-      await handleServiceInput(chatId, msg);
-    }
-  } catch (error) {
-    console.error("Error handling message:", error);
-    await bot.sendMessage(
-      chatId,
-      "❌ Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "💼 Vakansiya joylash", callback_data: "post_vacancy" }],
-            [{ text: "⚙️ Xizmat joylash", callback_data: "post_service" }],
-            [{ text: "❓ Yordam", callback_data: "help" }],
-          ],
-        },
+  // Check if user is in active step process
+  const isInVacancyProcess = userStates.awaitingVacancy[chatId];
+  const isInServiceProcess = userStates.awaitingService[chatId];
+  const isAwaitingPhone = userStates.awaitingPhoneNumber[chatId];
+
+  // If user is in active process, only handle step input
+  if (isInVacancyProcess || isInServiceProcess || isAwaitingPhone) {
+    try {
+      if (userStates.editingStep[chatId] !== undefined) {
+        stats.users.add(chatId);
+        await handleEditInput(chatId, msg);
+      } else if (userStates.awaitingVacancy[chatId]) {
+        stats.users.add(chatId);
+        await handleVacancyInput(chatId, msg);
+      } else if (userStates.awaitingService[chatId]) {
+        stats.users.add(chatId);
+        await handleServiceInput(chatId, msg);
       }
-    );
-    cleanup(chatId);
+    } catch (error) {
+      console.error("Error handling step input:", error);
+      await bot.sendMessage(
+        chatId,
+        "❌ Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "💼 Vakansiya joylash", callback_data: "post_vacancy" }],
+              [{ text: "⚙️ Xizmat joylash", callback_data: "post_service" }],
+              [{ text: "❓ Yordam", callback_data: "help" }],
+            ],
+          },
+        }
+      );
+      cleanup(chatId);
+    }
+    return;
+  }
+
+  // If not in active process, ignore regular text messages
+  // Only handle commands
+  if (msg.text.startsWith("/")) {
+    // Handle commands here if needed
+    return;
   }
 });
 
@@ -1525,6 +1576,22 @@ async function handleSkip(chatId) {
   const currentStep = userStates.awaitingVacancy[chatId].step;
   const step = steps[currentStep];
 
+  // Check if step is required
+  if (step.required) {
+    await bot.sendMessage(
+      chatId,
+      "⚠️ Bu maydon majburiy! O'tkazib yuborish mumkin emas.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "❌ Bekor qilish", callback_data: "cancel_post" }],
+          ],
+        },
+      }
+    );
+    return;
+  }
+
   // Special handling for link title step - skip both title and URL
   if (step.label === "🔗 Havola sarlavhasi") {
     userStates.awaitingVacancy[chatId].data[step.label] = "-";
@@ -1557,18 +1624,31 @@ async function handleNextStep(chatId) {
   if (currentState.step < steps.length) {
     const nextStep = steps[currentState.step];
 
+    // Create keyboard with skip button for non-required fields
     const keyboard = !nextStep.required
       ? {
           reply_markup: {
             inline_keyboard: [
-              [{ text: "⏩ O'tkazib yuborish", callback_data: "skip" }],
+              [
+                { text: "⏩ O'tkazib yuborish", callback_data: "skip" },
+                { text: "❌ Bekor qilish", callback_data: "cancel_post" },
+              ],
             ],
           },
         }
-      : undefined;
+      : {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "❌ Bekor qilish", callback_data: "cancel_post" }],
+            ],
+          },
+        };
+
     await bot.sendMessage(
       chatId,
-      `${nextStep.label}:\n<i>Misol: ${nextStep.example}</i>`,
+      `${nextStep.label}:\n<i>Misol: ${nextStep.example}</i>${
+        nextStep.required ? "\n\n⚠️ Bu maydon majburiy!" : ""
+      }`,
       {
         ...keyboard,
         parse_mode: "HTML",
@@ -1627,13 +1707,102 @@ async function handleVacancyInput(chatId, msg) {
     return;
   }
 
-  let processedValue = msg.text;
+  // Validate input
+  const inputText = msg.text.trim();
 
-  if (step.label.includes("Telegram")) {
-    processedValue = validateTelegramUsername(msg.text);
+  // Check if input is empty
+  if (!inputText || inputText.length === 0) {
+    await bot.sendMessage(
+      chatId,
+      "⚠️ Iltimos, ma'lumot kiriting! Bo'sh xabar yuborish mumkin emas.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "❌ Bekor qilish", callback_data: "cancel_post" }],
+          ],
+        },
+      }
+    );
+    return;
   }
 
-  // Handle all steps normally - no special handling needed for link steps
+  // Check input length
+  if (inputText.length > 500) {
+    await bot.sendMessage(
+      chatId,
+      "⚠️ Xabar juda uzun! Iltimos, 500 belgidan kamroq kiriting.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "❌ Bekor qilish", callback_data: "cancel_post" }],
+          ],
+        },
+      }
+    );
+    return;
+  }
+
+  let processedValue = inputText;
+
+  // Validate specific fields
+  if (step.label.includes("Telegram")) {
+    processedValue = validateTelegramUsername(inputText);
+    if (processedValue === "invalid") {
+      await bot.sendMessage(
+        chatId,
+        "⚠️ Noto'g'ri Telegram username! Iltimos, to'g'ri formatda kiriting (masalan: @username yoki username)",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "❌ Bekor qilish", callback_data: "cancel_post" }],
+            ],
+          },
+        }
+      );
+      return;
+    }
+  }
+
+  // Validate phone number if it's contact field
+  if (step.label.includes("Aloqa") && inputText.includes("+998")) {
+    const phoneValidation = validatePhoneNumber(inputText);
+    if (phoneValidation === "invalid") {
+      await bot.sendMessage(
+        chatId,
+        "⚠️ Noto'g'ri telefon raqam! Iltimos, to'g'ri formatda kiriting (masalan: +998 90 123 45 67)",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "❌ Bekor qilish", callback_data: "cancel_post" }],
+            ],
+          },
+        }
+      );
+      return;
+    }
+  }
+
+  // Validate URL if it's link field
+  if (step.label.includes("Havola URL") && inputText !== "-") {
+    try {
+      new URL(inputText);
+    } catch (error) {
+      await bot.sendMessage(
+        chatId,
+        "⚠️ Noto'g'ri URL! Iltimos, to'g'ri havola kiriting (masalan: https://example.com)",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "❌ Bekor qilish", callback_data: "cancel_post" }],
+            ],
+          },
+        }
+      );
+      return;
+    }
+  }
+
+  // Save the input
   userStates.awaitingVacancy[chatId].data[step.label] =
     escapeHTML(processedValue);
   userStates.awaitingVacancy[chatId].step++;
@@ -2639,7 +2808,98 @@ async function handleServiceInput(chatId, msg) {
   const step = serviceSteps[currentState.step];
   if (!step) return;
 
-  userStates.awaitingService[chatId].data[step.label] = escapeHTML(msg.text);
+  // Validate input
+  const inputText = msg.text.trim();
+
+  // Check if input is empty
+  if (!inputText || inputText.length === 0) {
+    await bot.sendMessage(
+      chatId,
+      "⚠️ Iltimos, ma'lumot kiriting! Bo'sh xabar yuborish mumkin emas.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "❌ Bekor qilish", callback_data: "cancel_service_post" }],
+          ],
+        },
+      }
+    );
+    return;
+  }
+
+  // Check input length
+  if (inputText.length > 500) {
+    await bot.sendMessage(
+      chatId,
+      "⚠️ Xabar juda uzun! Iltimos, 500 belgidan kamroq kiriting.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "❌ Bekor qilish", callback_data: "cancel_service_post" }],
+          ],
+        },
+      }
+    );
+    return;
+  }
+
+  let processedValue = inputText;
+
+  // Validate specific fields
+  if (step.label.includes("Aloqa") && inputText.includes("+998")) {
+    const phoneValidation = validatePhoneNumber(inputText);
+    if (phoneValidation === "invalid") {
+      await bot.sendMessage(
+        chatId,
+        "⚠️ Noto'g'ri telefon raqam! Iltimos, to'g'ri formatda kiriting (masalan: +998 90 123 45 67)",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "❌ Bekor qilish",
+                  callback_data: "cancel_service_post",
+                },
+              ],
+            ],
+          },
+        }
+      );
+      return;
+    }
+  }
+
+  // Validate URL if it's portfolio or website field
+  if (
+    (step.label.includes("Portfolio") || step.label.includes("Website")) &&
+    inputText !== "-"
+  ) {
+    try {
+      new URL(inputText);
+    } catch (error) {
+      await bot.sendMessage(
+        chatId,
+        "⚠️ Noto'g'ri URL! Iltimos, to'g'ri havola kiriting (masalan: https://example.com)",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "❌ Bekor qilish",
+                  callback_data: "cancel_service_post",
+                },
+              ],
+            ],
+          },
+        }
+      );
+      return;
+    }
+  }
+
+  // Save the input
+  userStates.awaitingService[chatId].data[step.label] =
+    escapeHTML(processedValue);
   userStates.awaitingService[chatId].step++;
 
   await handleServiceNextStep(chatId);
@@ -2651,10 +2911,23 @@ async function handleServiceNextStep(chatId) {
 
   if (currentState.step < serviceSteps.length) {
     const nextStep = serviceSteps[currentState.step];
+
+    // Create keyboard with cancel button
+    const keyboard = {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "❌ Bekor qilish", callback_data: "cancel_service_post" }],
+        ],
+      },
+    };
+
     await bot.sendMessage(
       chatId,
-      `${nextStep.label}:\n<i>Misol: ${nextStep.example}</i>`,
+      `${nextStep.label}:\n<i>Misol: ${nextStep.example}</i>${
+        nextStep.required ? "\n\n⚠️ Bu maydon majburiy!" : ""
+      }`,
       {
+        ...keyboard,
         parse_mode: "HTML",
       }
     );
