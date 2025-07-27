@@ -187,8 +187,7 @@ const mongoOptions = {
   retryWrites: true,
   retryReads: true,
   heartbeatFrequencyMS: 10000, // Heartbeat frequency
-  bufferMaxEntries: 0, // Disable mongoose buffering
-  bufferCommands: false, // Disable mongoose buffering
+  // Removed deprecated options: bufferMaxEntries and bufferCommands
 };
 
 async function connectToMongoDB() {
@@ -210,20 +209,46 @@ async function connectToMongoDB() {
 connectToMongoDB();
 
 // MongoDB connection events with reconnection logic
+let mongoRetryCount = 0;
+const maxMongoRetries = 5;
+
 mongoose.connection.on("connected", () => {
   console.log("✅ MongoDB connected successfully");
+  mongoRetryCount = 0; // Reset retry count on successful connection
 });
 
 mongoose.connection.on("error", (err) => {
   console.error("❌ MongoDB connection error:", err);
-  // Attempt to reconnect after error
-  setTimeout(connectToMongoDB, 5000);
+  mongoRetryCount++;
+
+  if (mongoRetryCount < maxMongoRetries) {
+    console.log(
+      `🔄 MongoDB reconnection attempt ${mongoRetryCount}/${maxMongoRetries} in 10 seconds...`
+    );
+    setTimeout(connectToMongoDB, 10000);
+  } else {
+    console.error(
+      "❌ Maximum MongoDB reconnection attempts reached. Stopping reconnection attempts."
+    );
+    // Don't exit the process, just log the error and continue without database
+  }
 });
 
 mongoose.connection.on("disconnected", () => {
   console.log("⚠️ MongoDB disconnected - attempting to reconnect...");
-  // Attempt to reconnect after disconnection
-  setTimeout(connectToMongoDB, 5000);
+  mongoRetryCount++;
+
+  if (mongoRetryCount < maxMongoRetries) {
+    console.log(
+      `🔄 MongoDB reconnection attempt ${mongoRetryCount}/${maxMongoRetries} in 10 seconds...`
+    );
+    setTimeout(connectToMongoDB, 10000);
+  } else {
+    console.error(
+      "❌ Maximum MongoDB reconnection attempts reached. Stopping reconnection attempts."
+    );
+    // Don't exit the process, just log the error and continue without database
+  }
 });
 
 // Periodic health check for bot and database
@@ -754,6 +779,36 @@ bot.onText(/\/start/, async (msg) => {
   stats.users.add(chatId);
 
   try {
+    // Check if MongoDB is connected before attempting database operations
+    if (mongoose.connection.readyState !== 1) {
+      console.warn(
+        "⚠️ MongoDB not connected, proceeding without database check"
+      );
+      // Proceed as if user doesn't exist (request phone number)
+      userStates.awaitingPhoneNumber[chatId] = true;
+      await safeBotCall(() =>
+        bot.sendMessage(
+          chatId,
+          "👋 Xush kelibsiz!\n\nBotdan foydalanish uchun telefon raqamingizni yuboring:",
+          {
+            reply_markup: {
+              keyboard: [
+                [
+                  {
+                    text: "📱 Telefon raqamni yuborish",
+                    request_contact: true,
+                  },
+                ],
+              ],
+              resize_keyboard: true,
+              one_time_keyboard: true,
+            },
+          }
+        )
+      );
+      return;
+    }
+
     // Check if user already exists
     const existingUser = await User.findOne({ chatId: chatId.toString() });
 
@@ -1156,6 +1211,18 @@ bot.on("message", async (msg) => {
       const lastName = msg.from.last_name || "";
       const username = msg.from.username || "";
 
+      // Check if MongoDB is connected before attempting to save
+      if (mongoose.connection.readyState !== 1) {
+        console.warn("⚠️ MongoDB not connected, cannot save user");
+        await safeBotCall(() =>
+          bot.sendMessage(
+            chatId,
+            "⚠️ Ma'lumotlar bazasi bilan bog'lanishda muammo bor. Iltimos, keyinroq qayta urinib ko'ring."
+          )
+        );
+        return;
+      }
+
       // Save user to database
       const newUser = new User({
         chatId: chatId.toString(),
@@ -1168,35 +1235,39 @@ bot.on("message", async (msg) => {
       await newUser.save();
       delete userStates.awaitingPhoneNumber[chatId];
 
-      bot.sendMessage(
-        chatId,
-        "✅ Siz muvaffaqiyatli ro'yxatdan o'tdingiz!\n\nQuyidagi variantlardan birini tanlang:",
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "💼 Vakansiya joylash (BEPUL)",
-                  callback_data: "post_vacancy",
-                },
+      await safeBotCall(() =>
+        bot.sendMessage(
+          chatId,
+          "✅ Siz muvaffaqiyatli ro'yxatdan o'tdingiz!\n\nQuyidagi variantlardan birini tanlang:",
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: "💼 Vakansiya joylash (BEPUL)",
+                    callback_data: "post_vacancy",
+                  },
+                ],
+                [
+                  {
+                    text: "⚙️ Xizmat joylash (PULLIK)",
+                    callback_data: "post_service",
+                  },
+                ],
+                [{ text: "❓ Yordam", callback_data: "help" }],
               ],
-              [
-                {
-                  text: "⚙️ Xizmat joylash (PULLIK)",
-                  callback_data: "post_service",
-                },
-              ],
-              [{ text: "❓ Yordam", callback_data: "help" }],
-            ],
-            remove_keyboard: true,
-          },
-        }
+              remove_keyboard: true,
+            },
+          }
+        )
       );
     } catch (error) {
       console.error("Error saving user:", error);
-      bot.sendMessage(
-        chatId,
-        "❌ Ro'yxatdan o'tishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring."
+      await safeBotCall(() =>
+        bot.sendMessage(
+          chatId,
+          "❌ Ro'yxatdan o'tishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring."
+        )
       );
     }
     return;
@@ -2058,10 +2129,22 @@ if (server) {
 
 // Health check endpoint
 app.get("/health", (req, res) => {
+  const botStatus = bot.isPolling();
+  const dbStatus = mongoose.connection.readyState === 1;
+
+  // Determine overall status
+  let overallStatus = "ok";
+  if (!botStatus) {
+    overallStatus = "bot_error";
+  } else if (!dbStatus) {
+    overallStatus = "db_error";
+  }
+
   res.json({
-    status: "ok",
-    bot: bot.isPolling(),
-    mongodb: mongoose.connection.readyState === 1,
+    status: overallStatus,
+    bot: botStatus,
+    mongodb: dbStatus,
+    mongodb_retry_count: mongoRetryCount,
     timestamp: new Date().toISOString(),
   });
 });
