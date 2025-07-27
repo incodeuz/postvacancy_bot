@@ -273,7 +273,7 @@ setInterval(() => {
   );
 }, 60000); // Check every minute
 
-// User Schema
+// User Schema with statistics tracking
 const userSchema = new mongoose.Schema({
   chatId: { type: String, required: true, unique: true },
   phoneNumber: { type: String, required: true },
@@ -282,6 +282,14 @@ const userSchema = new mongoose.Schema({
   username: String,
   registeredAt: { type: Date, default: Date.now },
   isActive: { type: Boolean, default: true },
+  // Statistics tracking
+  totalVacanciesSubmitted: { type: Number, default: 0 },
+  totalVacanciesApproved: { type: Number, default: 0 },
+  totalVacanciesRejected: { type: Number, default: 0 },
+  totalServicesSubmitted: { type: Number, default: 0 },
+  totalServicesApproved: { type: Number, default: 0 },
+  totalServicesRejected: { type: Number, default: 0 },
+  lastActivity: { type: Date, default: Date.now },
 });
 
 const User = mongoose.model("User", userSchema);
@@ -363,6 +371,16 @@ const stats = {
   approved: 0,
   rejected: 0,
   pending: 0,
+  services: 0,
+  servicesApproved: 0,
+  servicesRejected: 0,
+  servicesPending: 0,
+  totalUsers: 0,
+  activeUsers: 0,
+  todayUsers: 0,
+  todayVacancies: 0,
+  todayApproved: 0,
+  todayRejected: 0,
 };
 
 const steps = [
@@ -983,36 +1001,76 @@ bot.onText(/\/admin-panel/, async (msg) => {
     );
 
     try {
-      // Fetch all real data from database
+      // Fetch comprehensive statistics from database
       const totalUsers = await User.countDocuments();
       const activeUsers = await User.countDocuments({ isActive: true });
       const todayUsers = await User.countDocuments({
         registeredAt: { $gte: new Date().setHours(0, 0, 0, 0) },
       });
 
-      // Get real vacancy statistics by counting from pendingPosts and other sources
+      // Get vacancy statistics
+      const totalVacanciesSubmitted = await User.aggregate([
+        { $group: { _id: null, total: { $sum: "$totalVacanciesSubmitted" } } },
+      ]);
+      const totalVacanciesApproved = await User.aggregate([
+        { $group: { _id: null, total: { $sum: "$totalVacanciesApproved" } } },
+      ]);
+      const totalVacanciesRejected = await User.aggregate([
+        { $group: { _id: null, total: { $sum: "$totalVacanciesRejected" } } },
+      ]);
+
+      // Get service statistics
+      const totalServicesSubmitted = await User.aggregate([
+        { $group: { _id: null, total: { $sum: "$totalServicesSubmitted" } } },
+      ]);
+      const totalServicesApproved = await User.aggregate([
+        { $group: { _id: null, total: { $sum: "$totalServicesApproved" } } },
+      ]);
+      const totalServicesRejected = await User.aggregate([
+        { $group: { _id: null, total: { $sum: "$totalServicesRejected" } } },
+      ]);
+
+      // Get pending count
       const pendingCount = Object.keys(userStates.pendingPosts || {}).length;
 
-      // Use stats object for accumulated totals, but ensure they're not 0
-      const totalVacancies = Math.max(stats.vacancies, 0);
-      const approvedVacancies = Math.max(stats.approved, 0);
-      const rejectedVacancies = Math.max(stats.rejected, 0);
+      // Calculate totals
+      const totalVacancies = totalVacanciesSubmitted[0]?.total || 0;
+      const approvedVacancies = totalVacanciesApproved[0]?.total || 0;
+      const rejectedVacancies = totalVacanciesRejected[0]?.total || 0;
+      const totalServices = totalServicesSubmitted[0]?.total || 0;
+      const approvedServices = totalServicesApproved[0]?.total || 0;
+      const rejectedServices = totalServicesRejected[0]?.total || 0;
 
       const statsMessage = `
-📊 <b>Admin Panel - Statistikalar</b>
+📊 <b>Admin Panel - Asosiy Statistika</b>
 
 👥 <b>Foydalanuvchilar:</b>
 ● Jami: ${totalUsers}
 ● Faol: ${activeUsers}
 ● Bugun ro'yxatdan o'tgan: ${todayUsers}
 
-📋 <b>E'lonlar:</b>
+📋 <b>Vakansiyalar:</b>
 ● Jami yuborilgan: ${totalVacancies}
 ● Tasdiqlangan: ${approvedVacancies}
 ● Rad etilgan: ${rejectedVacancies}
 ● Kutilmoqda: ${pendingCount}
 
+⚙️ <b>Xizmatlar:</b>
+● Jami yuborilgan: ${totalServices}
+● Tasdiqlangan: ${approvedServices}
+● Rad etilgan: ${rejectedServices}
 
+📈 <b>Umumiy:</b>
+● Jami e'lonlar: ${totalVacancies + totalServices}
+● Muvaffaqiyat foizi: ${
+        totalVacancies + totalServices > 0
+          ? Math.round(
+              ((approvedVacancies + approvedServices) /
+                (totalVacancies + totalServices)) *
+                100
+            )
+          : 0
+      }%
       `;
 
       // Edit the loading message with real data
@@ -1027,11 +1085,25 @@ bot.onText(/\/admin-panel/, async (msg) => {
                 text: "👥 Foydalanuvchilar ro'yxati",
                 callback_data: "user_list",
               },
-            ],
-            [
               {
                 text: "📊 Batafsil statistika",
                 callback_data: "detailed_stats",
+              },
+            ],
+            [
+              {
+                text: "🏆 Top foydalanuvchilar",
+                callback_data: "top_users",
+              },
+              {
+                text: "📅 Kunlik statistika",
+                callback_data: "daily_stats",
+              },
+            ],
+            [
+              {
+                text: "📋 Kutilmoqda e'lonlar",
+                callback_data: "pending_posts",
               },
             ],
           ],
@@ -1168,6 +1240,14 @@ bot.on("callback_query", async (callbackQuery) => {
       await handleUserList(callbackQuery);
     } else if (data === "detailed_stats") {
       await handleDetailedStats(callbackQuery);
+    } else if (data === "top_users") {
+      await handleTopUsers(callbackQuery);
+    } else if (data === "daily_stats") {
+      await handleDailyStats(callbackQuery);
+    } else if (data === "pending_posts") {
+      await handlePendingPosts(callbackQuery);
+    } else if (data.startsWith("user_page_")) {
+      await handleUserPage(callbackQuery, data);
     } else if (data.startsWith("tariff_")) {
       await handleTariffSelection(chatId, data, callbackQuery);
     } else if (data === "admin_panel_button") {
@@ -1694,6 +1774,26 @@ async function handleAcceptedPost(post, adminChatId) {
   const postedMessages = [];
 
   try {
+    // Update user statistics
+    if (post.chatId && mongoose.connection.readyState === 1) {
+      try {
+        const user = await User.findOne({ chatId: post.chatId.toString() });
+        if (user) {
+          if (post.type === "service") {
+            user.totalServicesSubmitted += 1;
+            user.totalServicesApproved += 1;
+          } else {
+            user.totalVacanciesSubmitted += 1;
+            user.totalVacanciesApproved += 1;
+          }
+          user.lastActivity = new Date();
+          await user.save();
+        }
+      } catch (dbError) {
+        console.error("Error updating user statistics:", dbError);
+      }
+    }
+
     // Post to category channel if not main
     if (category !== "Other" && channels[category]) {
       const categoryPost = await bot.sendPhoto(
@@ -1770,6 +1870,26 @@ async function sendConfirmationMessages(post, postedMessages, adminChatId) {
 }
 
 async function handleRejectedPost(post, adminChatId) {
+  // Update user statistics
+  if (post.chatId && mongoose.connection.readyState === 1) {
+    try {
+      const user = await User.findOne({ chatId: post.chatId.toString() });
+      if (user) {
+        if (post.type === "service") {
+          user.totalServicesSubmitted += 1;
+          user.totalServicesRejected += 1;
+        } else {
+          user.totalVacanciesSubmitted += 1;
+          user.totalVacanciesRejected += 1;
+        }
+        user.lastActivity = new Date();
+        await user.save();
+      }
+    } catch (dbError) {
+      console.error("Error updating user statistics:", dbError);
+    }
+  }
+
   await bot.sendMessage(adminChatId, "❌ E'lon rad etildi.");
   if (post.chatId && post.chatId !== adminId) {
     await bot.sendMessage(
@@ -1792,6 +1912,9 @@ async function handleRejectedPost(post, adminChatId) {
   }
 }
 
+// Pagination state for user list
+const userListPagination = {};
+
 async function handleUserList(callbackQuery) {
   const chatId = callbackQuery.message.chat.id;
 
@@ -1804,15 +1927,24 @@ async function handleUserList(callbackQuery) {
   }
 
   try {
-    const users = await User.find().sort({ registeredAt: -1 }).limit(20);
+    const page = 1;
+    const limit = 10;
+    const skip = (page - 1) * limit;
+
+    const totalUsers = await User.countDocuments();
+    const users = await User.find()
+      .sort({ registeredAt: -1 })
+      .skip(skip)
+      .limit(limit);
 
     if (users.length === 0) {
       await bot.sendMessage(chatId, "📝 Hech qanday foydalanuvchi topilmadi.");
       return;
     }
 
-    let userListMessage =
-      "👥 <b>Foydalanuvchilar ro'yxati (oxirgi 20 ta):</b>\n\n";
+    let userListMessage = `👥 <b>Foydalanuvchilar ro'yxati</b>\n`;
+    userListMessage += `📊 Sahifa ${page} / ${Math.ceil(totalUsers / limit)}\n`;
+    userListMessage += `📈 Jami: ${totalUsers} foydalanuvchi\n\n`;
 
     users.forEach((user, index) => {
       const registeredDate = new Date(user.registeredAt).toLocaleDateString(
@@ -1823,17 +1955,43 @@ async function handleUserList(callbackQuery) {
         : "Noma'lum";
       const username = user.username ? `(@${user.username})` : "";
 
-      userListMessage += `${index + 1}. <b>${userName}</b> ${username}\n`;
+      userListMessage += `${
+        skip + index + 1
+      }. <b>${userName}</b> ${username}\n`;
       userListMessage += `   📱 ${user.phoneNumber}\n`;
-      userListMessage += `   📅 ${registeredDate}\n\n`;
+      userListMessage += `   📅 ${registeredDate}\n`;
+      userListMessage += `   📊 Vakansiya: ${
+        user.totalVacanciesSubmitted || 0
+      } | Xizmat: ${user.totalServicesSubmitted || 0}\n\n`;
     });
+
+    // Create pagination buttons
+    const keyboard = [];
+    const totalPages = Math.ceil(totalUsers / limit);
+
+    if (totalPages > 1) {
+      const row = [];
+      if (page > 1) {
+        row.push({
+          text: "⬅️ Oldingi",
+          callback_data: `user_page_${page - 1}`,
+        });
+      }
+      if (page < totalPages) {
+        row.push({
+          text: "Keyingi ➡️",
+          callback_data: `user_page_${page + 1}`,
+        });
+      }
+      keyboard.push(row);
+    }
+
+    keyboard.push([{ text: "🔙 Orqaga", callback_data: "back_to_admin" }]);
 
     await bot.sendMessage(chatId, userListMessage, {
       parse_mode: "HTML",
       reply_markup: {
-        inline_keyboard: [
-          [{ text: "🔙 Orqaga", callback_data: "back_to_admin" }],
-        ],
+        inline_keyboard: keyboard,
       },
     });
   } catch (error) {
@@ -1857,11 +2015,67 @@ async function handleDetailedStats(callbackQuery) {
   }
 
   try {
+    // Get comprehensive statistics
     const totalUsers = await User.countDocuments();
     const activeUsers = await User.countDocuments({ isActive: true });
     const todayUsers = await User.countDocuments({
       registeredAt: { $gte: new Date().setHours(0, 0, 0, 0) },
     });
+
+    // Get vacancy statistics
+    const vacancyStats = await User.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalSubmitted: { $sum: "$totalVacanciesSubmitted" },
+          totalApproved: { $sum: "$totalVacanciesApproved" },
+          totalRejected: { $sum: "$totalVacanciesRejected" },
+        },
+      },
+    ]);
+
+    // Get service statistics
+    const serviceStats = await User.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalSubmitted: { $sum: "$totalServicesSubmitted" },
+          totalApproved: { $sum: "$totalServicesApproved" },
+          totalRejected: { $sum: "$totalServicesRejected" },
+        },
+      },
+    ]);
+
+    // Get today's statistics
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayVacancies = await User.aggregate([
+      {
+        $match: { lastActivity: { $gte: today } },
+      },
+      {
+        $group: {
+          _id: null,
+          totalSubmitted: { $sum: "$totalVacanciesSubmitted" },
+          totalApproved: { $sum: "$totalVacanciesApproved" },
+        },
+      },
+    ]);
+
+    const stats = vacancyStats[0] || {
+      totalSubmitted: 0,
+      totalApproved: 0,
+      totalRejected: 0,
+    };
+    const serviceStatsData = serviceStats[0] || {
+      totalSubmitted: 0,
+      totalApproved: 0,
+      totalRejected: 0,
+    };
+    const todayStats = todayVacancies[0] || {
+      totalSubmitted: 0,
+      totalApproved: 0,
+    };
 
     const detailedMessage = `
 📊 <b>Batafsil Statistika</b>
@@ -1869,16 +2083,44 @@ async function handleDetailedStats(callbackQuery) {
 👥 <b>Foydalanuvchilar:</b>
 ● Jami: ${totalUsers}
 ● Faol: ${activeUsers}
-● Bugun: ${todayUsers}
+● Bugun ro'yxatdan o'tgan: ${todayUsers}
 
-📋 <b>E'lonlar:</b>
-● Jami yuborilgan: ${stats.vacancies}
-● Tasdiqlangan: ${stats.approved}
-● Rad etilgan: ${stats.rejected}
-● Kutilmoqda: ${stats.pending}
+📋 <b>Vakansiyalar:</b>
+● Jami yuborilgan: ${stats.totalSubmitted}
+● Tasdiqlangan: ${stats.totalApproved}
+● Rad etilgan: ${stats.totalRejected}
 ● Muvaffaqiyat foizi: ${
-      stats.vacancies > 0
-        ? Math.round((stats.approved / stats.vacancies) * 100)
+      stats.totalSubmitted > 0
+        ? Math.round((stats.totalApproved / stats.totalSubmitted) * 100)
+        : 0
+    }%
+
+⚙️ <b>Xizmatlar:</b>
+● Jami yuborilgan: ${serviceStatsData.totalSubmitted}
+● Tasdiqlangan: ${serviceStatsData.totalApproved}
+● Rad etilgan: ${serviceStatsData.totalRejected}
+● Muvaffaqiyat foizi: ${
+      serviceStatsData.totalSubmitted > 0
+        ? Math.round(
+            (serviceStatsData.totalApproved / serviceStatsData.totalSubmitted) *
+              100
+          )
+        : 0
+    }%
+
+📅 <b>Bugungi faollik:</b>
+● Vakansiya yuborilgan: ${todayStats.totalSubmitted}
+● Tasdiqlangan: ${todayStats.totalApproved}
+
+📈 <b>Umumiy ko'rsatkichlar:</b>
+● Jami e'lonlar: ${stats.totalSubmitted + serviceStatsData.totalSubmitted}
+● Umumiy muvaffaqiyat: ${
+      stats.totalSubmitted + serviceStatsData.totalSubmitted > 0
+        ? Math.round(
+            ((stats.totalApproved + serviceStatsData.totalApproved) /
+              (stats.totalSubmitted + serviceStatsData.totalSubmitted)) *
+              100
+          )
         : 0
     }%
     `;
@@ -1896,6 +2138,404 @@ async function handleDetailedStats(callbackQuery) {
     await bot.sendMessage(
       chatId,
       "❌ Batafsil statistikalarni yuklashda xatolik yuz berdi."
+    );
+  }
+}
+
+// Top foydalanuvchilar
+async function handleTopUsers(callbackQuery) {
+  const chatId = callbackQuery.message.chat.id;
+
+  if (chatId.toString() !== adminId) {
+    await bot.sendMessage(
+      chatId,
+      "⛔️ Sizda admin panelini ko'rish huquqi yo'q."
+    );
+    return;
+  }
+
+  try {
+    // Top vakansiya yuborgan foydalanuvchilar
+    const topVacancyUsers = await User.find({
+      totalVacanciesSubmitted: { $gt: 0 },
+    })
+      .sort({ totalVacanciesSubmitted: -1 })
+      .limit(5);
+
+    // Top xizmat yuborgan foydalanuvchilar
+    const topServiceUsers = await User.find({
+      totalServicesSubmitted: { $gt: 0 },
+    })
+      .sort({ totalServicesSubmitted: -1 })
+      .limit(5);
+
+    // Top muvaffaqiyatli foydalanuvchilar
+    const topSuccessfulUsers = await User.find({
+      $or: [
+        { totalVacanciesApproved: { $gt: 0 } },
+        { totalServicesApproved: { $gt: 0 } },
+      ],
+    })
+      .sort({
+        totalVacanciesApproved: -1,
+        totalServicesApproved: -1,
+      })
+      .limit(5);
+
+    let message = "🏆 <b>Top Foydalanuvchilar</b>\n\n";
+
+    // Top vakansiya yuborganlar
+    message += "📋 <b>Eng ko'p vakansiya yuborganlar:</b>\n";
+    topVacancyUsers.forEach((user, index) => {
+      const userName = user.firstName
+        ? `${user.firstName} ${user.lastName || ""}`.trim()
+        : "Noma'lum";
+      const username = user.username ? `@${user.username}` : "Username yo'q";
+      message += `${index + 1}. ${userName} (${username})\n`;
+      message += `   📊 Yuborilgan: ${user.totalVacanciesSubmitted} | Tasdiqlangan: ${user.totalVacanciesApproved}\n\n`;
+    });
+
+    // Top xizmat yuborganlar
+    message += "⚙️ <b>Eng ko'p xizmat yuborganlar:</b>\n";
+    topServiceUsers.forEach((user, index) => {
+      const userName = user.firstName
+        ? `${user.firstName} ${user.lastName || ""}`.trim()
+        : "Noma'lum";
+      const username = user.username ? `@${user.username}` : "Username yo'q";
+      message += `${index + 1}. ${userName} (${username})\n`;
+      message += `   📊 Yuborilgan: ${user.totalServicesSubmitted} | Tasdiqlangan: ${user.totalServicesApproved}\n\n`;
+    });
+
+    // Top muvaffaqiyatli
+    message += "✅ <b>Eng muvaffaqiyatli foydalanuvchilar:</b>\n";
+    topSuccessfulUsers.forEach((user, index) => {
+      const userName = user.firstName
+        ? `${user.firstName} ${user.lastName || ""}`.trim()
+        : "Noma'lum";
+      const username = user.username ? `@${user.username}` : "Username yo'q";
+      const totalApproved =
+        user.totalVacanciesApproved + user.totalServicesApproved;
+      message += `${index + 1}. ${userName} (${username})\n`;
+      message += `   📊 Tasdiqlangan: ${totalApproved}\n\n`;
+    });
+
+    await bot.sendMessage(chatId, message, {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔙 Orqaga", callback_data: "back_to_admin" }],
+        ],
+      },
+    });
+  } catch (error) {
+    console.error("Error in handleTopUsers:", error);
+    await bot.sendMessage(
+      chatId,
+      "❌ Top foydalanuvchilarni yuklashda xatolik yuz berdi."
+    );
+  }
+}
+
+// Kunlik statistika
+async function handleDailyStats(callbackQuery) {
+  const chatId = callbackQuery.message.chat.id;
+
+  if (chatId.toString() !== adminId) {
+    await bot.sendMessage(
+      chatId,
+      "⛔️ Sizda admin panelini ko'rish huquqi yo'q."
+    );
+    return;
+  }
+
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    // Bugungi statistika
+    const todayUsers = await User.countDocuments({
+      registeredAt: { $gte: today },
+    });
+
+    const todayVacancies = await User.aggregate([
+      {
+        $match: { lastActivity: { $gte: today } },
+      },
+      {
+        $group: {
+          _id: null,
+          submitted: { $sum: "$totalVacanciesSubmitted" },
+          approved: { $sum: "$totalVacanciesApproved" },
+          rejected: { $sum: "$totalVacanciesRejected" },
+        },
+      },
+    ]);
+
+    const todayServices = await User.aggregate([
+      {
+        $match: { lastActivity: { $gte: today } },
+      },
+      {
+        $group: {
+          _id: null,
+          submitted: { $sum: "$totalServicesSubmitted" },
+          approved: { $sum: "$totalServicesApproved" },
+          rejected: { $sum: "$totalServicesRejected" },
+        },
+      },
+    ]);
+
+    // Kechagi statistika
+    const yesterdayUsers = await User.countDocuments({
+      registeredAt: { $gte: yesterday, $lt: today },
+    });
+
+    const yesterdayVacancies = await User.aggregate([
+      {
+        $match: { lastActivity: { $gte: yesterday, $lt: today } },
+      },
+      {
+        $group: {
+          _id: null,
+          submitted: { $sum: "$totalVacanciesSubmitted" },
+          approved: { $sum: "$totalVacanciesApproved" },
+          rejected: { $sum: "$totalVacanciesRejected" },
+        },
+      },
+    ]);
+
+    const yesterdayServices = await User.aggregate([
+      {
+        $match: { lastActivity: { $gte: yesterday, $lt: today } },
+      },
+      {
+        $group: {
+          _id: null,
+          submitted: { $sum: "$totalServicesSubmitted" },
+          approved: { $sum: "$totalServicesApproved" },
+          rejected: { $sum: "$totalServicesRejected" },
+        },
+      },
+    ]);
+
+    const todayStats = todayVacancies[0] || {
+      submitted: 0,
+      approved: 0,
+      rejected: 0,
+    };
+    const todayServiceStats = todayServices[0] || {
+      submitted: 0,
+      approved: 0,
+      rejected: 0,
+    };
+    const yesterdayStats = yesterdayVacancies[0] || {
+      submitted: 0,
+      approved: 0,
+      rejected: 0,
+    };
+    const yesterdayServiceStats = yesterdayServices[0] || {
+      submitted: 0,
+      approved: 0,
+      rejected: 0,
+    };
+
+    const message = `
+📅 <b>Kunlik Statistika</b>
+
+📊 <b>Bugun (${today.toLocaleDateString("uz-UZ")}):</b>
+👥 Yangi foydalanuvchilar: ${todayUsers}
+📋 Vakansiyalar: ${todayStats.submitted} yuborilgan, ${
+      todayStats.approved
+    } tasdiqlangan
+⚙️ Xizmatlar: ${todayServiceStats.submitted} yuborilgan, ${
+      todayServiceStats.approved
+    } tasdiqlangan
+
+📊 <b>Kecha (${yesterday.toLocaleDateString("uz-UZ")}):</b>
+👥 Yangi foydalanuvchilar: ${yesterdayUsers}
+📋 Vakansiyalar: ${yesterdayStats.submitted} yuborilgan, ${
+      yesterdayStats.approved
+    } tasdiqlangan
+⚙️ Xizmatlar: ${yesterdayServiceStats.submitted} yuborilgan, ${
+      yesterdayServiceStats.approved
+    } tasdiqlangan
+
+📈 <b>O'zgarish:</b>
+👥 Foydalanuvchilar: ${todayUsers > yesterdayUsers ? "+" : ""}${
+      todayUsers - yesterdayUsers
+    }
+📋 Vakansiyalar: ${todayStats.submitted > yesterdayStats.submitted ? "+" : ""}${
+      todayStats.submitted - yesterdayStats.submitted
+    }
+⚙️ Xizmatlar: ${
+      todayServiceStats.submitted > yesterdayServiceStats.submitted ? "+" : ""
+    }${todayServiceStats.submitted - yesterdayServiceStats.submitted}
+    `;
+
+    await bot.sendMessage(chatId, message, {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔙 Orqaga", callback_data: "back_to_admin" }],
+        ],
+      },
+    });
+  } catch (error) {
+    console.error("Error in handleDailyStats:", error);
+    await bot.sendMessage(
+      chatId,
+      "❌ Kunlik statistikani yuklashda xatolik yuz berdi."
+    );
+  }
+}
+
+// Kutilmoqda e'lonlar
+async function handlePendingPosts(callbackQuery) {
+  const chatId = callbackQuery.message.chat.id;
+
+  if (chatId.toString() !== adminId) {
+    await bot.sendMessage(
+      chatId,
+      "⛔️ Sizda admin panelini ko'rish huquqi yo'q."
+    );
+    return;
+  }
+
+  try {
+    const pendingPosts = Object.keys(userStates.pendingPosts || {});
+
+    if (pendingPosts.length === 0) {
+      await bot.sendMessage(chatId, "📋 Kutilmoqda e'lonlar yo'q.", {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔙 Orqaga", callback_data: "back_to_admin" }],
+          ],
+        },
+      });
+      return;
+    }
+
+    let message = `📋 <b>Kutilmoqda E'lonlar (${pendingPosts.length} ta)</b>\n\n`;
+
+    pendingPosts.forEach((messageId, index) => {
+      const post = userStates.pendingPosts[messageId];
+      if (post) {
+        const userName = post.userInfo
+          ? post.userInfo.split("\n")[1]?.replace("● Username: ", "") ||
+            "Noma'lum"
+          : "Noma'lum";
+        const postType = post.type === "service" ? "⚙️ Xizmat" : "📋 Vakansiya";
+        message += `${index + 1}. ${postType} - ${userName}\n`;
+        message += `   📅 ID: ${messageId}\n\n`;
+      }
+    });
+
+    await bot.sendMessage(chatId, message, {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔙 Orqaga", callback_data: "back_to_admin" }],
+        ],
+      },
+    });
+  } catch (error) {
+    console.error("Error in handlePendingPosts:", error);
+    await bot.sendMessage(
+      chatId,
+      "❌ Kutilmoqda e'lonlarni yuklashda xatolik yuz berdi."
+    );
+  }
+}
+
+// Foydalanuvchilar sahifasi
+async function handleUserPage(callbackQuery, data) {
+  const chatId = callbackQuery.message.chat.id;
+  const page = parseInt(data.split("_")[2]);
+
+  if (chatId.toString() !== adminId) {
+    await bot.sendMessage(
+      chatId,
+      "⛔️ Sizda admin panelini ko'rish huquqi yo'q."
+    );
+    return;
+  }
+
+  try {
+    const limit = 10;
+    const skip = (page - 1) * limit;
+
+    const totalUsers = await User.countDocuments();
+    const users = await User.find()
+      .sort({ registeredAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    if (users.length === 0) {
+      await bot.sendMessage(chatId, "📝 Bu sahifada foydalanuvchilar yo'q.");
+      return;
+    }
+
+    let userListMessage = `👥 <b>Foydalanuvchilar ro'yxati</b>\n`;
+    userListMessage += `📊 Sahifa ${page} / ${Math.ceil(totalUsers / limit)}\n`;
+    userListMessage += `📈 Jami: ${totalUsers} foydalanuvchi\n\n`;
+
+    users.forEach((user, index) => {
+      const registeredDate = new Date(user.registeredAt).toLocaleDateString(
+        "uz-UZ"
+      );
+      const userName = user.firstName
+        ? `${user.firstName} ${user.lastName || ""}`.trim()
+        : "Noma'lum";
+      const username = user.username ? `(@${user.username})` : "";
+
+      userListMessage += `${
+        skip + index + 1
+      }. <b>${userName}</b> ${username}\n`;
+      userListMessage += `   📱 ${user.phoneNumber}\n`;
+      userListMessage += `   📅 ${registeredDate}\n`;
+      userListMessage += `   📊 Vakansiya: ${
+        user.totalVacanciesSubmitted || 0
+      } | Xizmat: ${user.totalServicesSubmitted || 0}\n\n`;
+    });
+
+    // Create pagination buttons
+    const keyboard = [];
+    const totalPages = Math.ceil(totalUsers / limit);
+
+    if (totalPages > 1) {
+      const row = [];
+      if (page > 1) {
+        row.push({
+          text: "⬅️ Oldingi",
+          callback_data: `user_page_${page - 1}`,
+        });
+      }
+      if (page < totalPages) {
+        row.push({
+          text: "Keyingi ➡️",
+          callback_data: `user_page_${page + 1}`,
+        });
+      }
+      keyboard.push(row);
+    }
+
+    keyboard.push([{ text: "🔙 Orqaga", callback_data: "back_to_admin" }]);
+
+    await bot.editMessageText(userListMessage, {
+      chat_id: chatId,
+      message_id: callbackQuery.message.message_id,
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: keyboard,
+      },
+    });
+  } catch (error) {
+    console.error("Error in handleUserPage:", error);
+    await bot.sendMessage(
+      chatId,
+      "❌ Foydalanuvchilar sahifasini yuklashda xatolik yuz berdi."
     );
   }
 }
