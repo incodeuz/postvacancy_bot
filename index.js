@@ -1,7 +1,7 @@
 const express = require("express");
 const TelegramBot = require("node-telegram-bot-api");
 const mongoose = require("mongoose");
-const schedule = require("node-schedule");
+// Scheduler removed - not needed
 require("dotenv").config();
 
 const app = express();
@@ -123,6 +123,9 @@ bot.on("error", (error) => {
         }, 5000);
       }
     }, 3000);
+  } else {
+    // For other errors, log and continue
+    console.error("⚠️ Bot xatoligi, lekin davom etmoqda:", error.message);
   }
 });
 
@@ -173,6 +176,9 @@ bot.on("polling_error", (error) => {
         }, 5000);
       }
     }, 3000);
+  } else {
+    // For other polling errors, log and continue
+    console.error("⚠️ Polling xatoligi, lekin davom etmoqda:", error.message);
   }
 });
 
@@ -200,8 +206,14 @@ async function connectToMongoDB() {
     console.log("✅ MongoDB connected successfully");
   } catch (error) {
     console.error("❌ MongoDB connection error:", error);
-    // Retry connection after 5 seconds
-    setTimeout(connectToMongoDB, 5000);
+    // Retry connection after 5 seconds with exponential backoff
+    const retryDelay = Math.min(5000 * Math.pow(2, mongoRetryCount), 30000);
+    console.log(
+      `🔄 MongoDB qayta ulanish ${Math.round(
+        retryDelay / 1000
+      )} soniyadan keyin...`
+    );
+    setTimeout(connectToMongoDB, retryDelay);
   }
 }
 
@@ -294,28 +306,7 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model("User", userSchema);
 
-// Advertisement Schema for admin ads management
-const advertisementSchema = new mongoose.Schema({
-  channelLink: { type: String, required: true },
-  messageId: { type: String, required: true },
-  startDate: { type: Date, required: true },
-  endDate: { type: Date, required: true },
-  durationDays: { type: Number, default: 0 },
-  durationHours: { type: Number, default: 0 },
-  durationMinutes: { type: Number, default: 0 },
-  totalMinutes: { type: Number, required: true },
-  description: { type: String, default: "" },
-  createdAt: { type: Date, default: Date.now },
-  isActive: { type: Boolean, default: true },
-  channelMessageIds: [
-    {
-      channel: String,
-      messageId: String,
-    },
-  ],
-});
-
-const Advertisement = mongoose.model("Advertisement", advertisementSchema);
+// Advertisement Schema removed - no longer needed without scheduler
 
 // Channel configurations
 const channels = {
@@ -712,75 +703,7 @@ function formatServiceText(serviceDetails) {
   return serviceText;
 }
 
-// Enhanced Advertisement Deletion Function
-async function deleteExpiredAds() {
-  try {
-    const now = new Date();
-    const expiredAds = await Advertisement.find({
-      endDate: { $lte: now },
-      isActive: true,
-    });
-
-    for (const ad of expiredAds) {
-      let deletedCount = 0;
-
-      // Delete from channels if message IDs are stored
-      if (ad.channelMessageIds && ad.channelMessageIds.length > 0) {
-        for (const channelMsg of ad.channelMessageIds) {
-          try {
-            await bot.deleteMessage(channelMsg.channel, channelMsg.messageId);
-            console.log(`🗑️ Deleted ad message from ${channelMsg.channel}`);
-            deletedCount++;
-          } catch (error) {
-            console.error(
-              `Error deleting message from ${channelMsg.channel}:`,
-              error.message
-            );
-          }
-        }
-      } else {
-        // Try to extract message ID from channel link if not stored
-        try {
-          const linkMatch = ad.channelLink.match(
-            /https:\/\/t\.me\/([^\/]+)\/(\d+)/
-          );
-          if (linkMatch) {
-            const channelUsername = "@" + linkMatch[1];
-            const messageId = linkMatch[2];
-
-            await bot.deleteMessage(channelUsername, messageId);
-            console.log(
-              `🗑️ Deleted ad message from ${channelUsername} using link extraction`
-            );
-            deletedCount++;
-          }
-        } catch (error) {
-          console.error(
-            `Error deleting message using link extraction:`,
-            error.message
-          );
-        }
-      }
-
-      // Mark as inactive
-      ad.isActive = false;
-      await ad.save();
-
-      console.log(
-        `✅ Advertisement expired and deleted: ${ad.description} (${deletedCount} messages deleted)`
-      );
-    }
-
-    if (expiredAds.length > 0) {
-      await bot.sendMessage(
-        adminId,
-        `🗑️ ${expiredAds.length} ta reklama muddati tugab o'chirildi!`
-      );
-    }
-  } catch (error) {
-    console.error("Error deleting expired ads:", error);
-  }
-}
+// Advertisement deletion function removed - no longer needed without scheduler
 
 // Command handlers
 bot.onText(/\/start/, async (msg) => {
@@ -909,7 +832,7 @@ bot.onText(/\/admin-help/, async (msg) => {
 
 
 🧪 <b>Test Komandalar:</b>
-• <b>/test-ads</b> - Reklama deletion test qilish
+• Test komandalar mavjud emas
 
 💡 E'lonlarni tasdiqlash va rad etish admin panelda callback orqali amalga oshiriladi.
     `;
@@ -1128,19 +1051,9 @@ bot.onText(/\/admin-panel/, async (msg) => {
   }
 });
 
-// Manual command to test ad deletion (admin only)
-bot.onText(/\/test-ads/, async (msg) => {
-  const chatId = msg.chat.id;
-  if (chatId.toString() === adminId) {
-    await bot.sendMessage(chatId, "🔄 Reklama deletion boshlandi...");
-    await deleteExpiredAds();
-  } else {
-    await bot.sendMessage(chatId, "⛔️ Bu komanda faqat admin uchun.");
-  }
-});
+// Test ads command removed - no longer needed
 
-// Schedule ad deletion check (every hour)
-schedule.scheduleJob("0 * * * *", deleteExpiredAds);
+// Scheduler removed - ad deletion will be handled manually if needed
 
 // Callback query handler
 bot.on("callback_query", async (callbackQuery) => {
@@ -3006,7 +2919,7 @@ async function handleEditInput(chatId, msg) {
   await bot.sendMessage(chatId, "✏️ Edit funksiyasi hozircha mavjud emas.");
 }
 
-console.log("⏰ Scheduler o'rnatildi: reklama tekshiruvi har soat");
+console.log("✅ Bot tayyor - scheduler o'chirildi");
 
 // Express server setup
 app.get("/", (req, res) => {

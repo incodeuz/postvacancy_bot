@@ -26,3 +26,6 @@
 2025-07-27T16:05:10: 🔍 Health check - Bot: ✅, DB: ❌
 2025-07-27T16:05:13: ✅ MongoDB connected successfully
 2025-07-27T16:05:13: ✅ MongoDB connected successfully
+2025-07-27T16:05:47: 
+🛑 Received SIGINT. Graceful shutdown...
+2025-07-27T16:05:53: ✅ Bot polling stopped.
