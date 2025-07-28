@@ -34,6 +34,16 @@ const bot = new TelegramBot(token, {
   },
 });
 
+// Force stop any existing webhook before starting polling
+bot
+  .setWebHook("")
+  .then(() => {
+    console.log("✅ Webhook o'chirildi");
+  })
+  .catch((err) => {
+    console.log("⚠️ Webhook o'chirishda xatolik:", err.message);
+  });
+
 // Connection retry logic with exponential backoff
 let retryCount = 0;
 const maxRetries = 10; // Increased from 5 to 10
@@ -1079,11 +1089,12 @@ bot.on("callback_query", async (callbackQuery) => {
 
     // If user is in active process, only allow specific actions
     if (isInVacancyProcess || isInServiceProcess || isAwaitingPhone) {
-      // Only allow cancel actions during active process
+      // Only allow cancel and skip actions during active process
       if (
         data === "cancel_post" ||
         data === "cancel_service" ||
-        data === "cancel_service_post"
+        data === "cancel_service_post" ||
+        data === "skip"
       ) {
         if (data === "cancel_post") {
           await handlePostCancellation(chatId, callbackQuery);
@@ -1091,6 +1102,8 @@ bot.on("callback_query", async (callbackQuery) => {
           await handleCancelService(chatId);
         } else if (data === "cancel_service_post") {
           await handleServiceCancellation(chatId, callbackQuery);
+        } else if (data === "skip") {
+          await handleSkip(chatId);
         }
         return;
       }
@@ -1182,7 +1195,17 @@ bot.on("callback_query", async (callbackQuery) => {
     } else if (data === "cancel_post") {
       await handlePostCancellation(chatId, callbackQuery);
     } else if (data === "skip") {
-      await handleSkip(chatId);
+      try {
+        await handleSkip(chatId);
+        // Answer the callback query to remove the loading state
+        await bot.answerCallbackQuery(callbackQuery.id);
+      } catch (error) {
+        console.error("Error in skip handling:", error);
+        await bot.answerCallbackQuery(callbackQuery.id, {
+          text: "❌ O'tkazib yuborishda xatolik yuz berdi",
+          show_alert: true,
+        });
+      }
     } else if (data.startsWith("accept_") || data.startsWith("reject_")) {
       await handleAdminActions(callbackQuery, data);
     } else if (data === "user_list") {
@@ -1224,7 +1247,11 @@ bot.on("callback_query", async (callbackQuery) => {
     }
   } catch (error) {
     console.error("Callback query error:", error);
-    await handleCallbackError(callbackQuery, error);
+    try {
+      await handleCallbackError(callbackQuery, error);
+    } catch (notificationError) {
+      console.error("Could not send error notification:", notificationError);
+    }
   }
 });
 
@@ -1495,27 +1522,77 @@ async function handlePostCancellation(chatId, callbackQuery) {
 }
 
 async function handleSkip(chatId) {
-  const currentState = userStates.awaitingVacancy[chatId];
-  if (!currentState) {
-    await bot.sendMessage(chatId, "❌ Vakansiya yaratish jarayoni topilmadi.");
-    return;
-  }
+  try {
+    const currentState = userStates.awaitingVacancy[chatId];
+    if (!currentState) {
+      await bot.sendMessage(
+        chatId,
+        "❌ Vakansiya yaratish jarayoni topilmadi."
+      );
+      return;
+    }
 
-  const currentStep = currentState.step;
-  const step = steps[currentStep];
+    const currentStep = currentState.step;
+    const step = steps[currentStep];
 
-  if (!step) {
-    await bot.sendMessage(chatId, "❌ Step topilmadi.");
-    return;
-  }
+    if (!step) {
+      await bot.sendMessage(chatId, "❌ Step topilmadi.");
+      return;
+    }
 
-  console.log(`🔄 Skip qilish: ${step.label}, required: ${step.required}`);
+    console.log(`🔄 Skip qilish: ${step.label}, required: ${step.required}`);
 
-  // Check if step is required
-  if (step.required) {
+    // Check if step is required
+    if (step.required) {
+      await bot.sendMessage(
+        chatId,
+        "⚠️ Bu maydon majburiy! O'tkazib yuborish mumkin emas.",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "❌ Bekor qilish", callback_data: "cancel_post" }],
+            ],
+          },
+        }
+      );
+      return;
+    }
+
+    // Special handling for link title step - skip both title and URL
+    if (step.label === "🔗 Havola sarlavhasi") {
+      userStates.awaitingVacancy[chatId].data[step.label] = "-";
+      userStates.awaitingVacancy[chatId].data[steps[7].label] = "-"; // Skip URL step too
+      userStates.awaitingVacancy[chatId].step += 2; // Skip both steps
+      console.log(
+        `⏩ Havola sarlavhasi va URL skip qilindi, keyingi step: ${userStates.awaitingVacancy[chatId].step}`
+      );
+      await handleNextStep(chatId);
+      return;
+    }
+
+    // Special handling for link URL step - skip only URL
+    if (step.label === "🔗 Havola URL") {
+      userStates.awaitingVacancy[chatId].data[step.label] = "-";
+      userStates.awaitingVacancy[chatId].step++;
+      console.log(
+        `⏩ Havola URL skip qilindi, keyingi step: ${userStates.awaitingVacancy[chatId].step}`
+      );
+      await handleNextStep(chatId);
+      return;
+    }
+
+    // Regular skip
+    userStates.awaitingVacancy[chatId].data[step.label] = "-";
+    userStates.awaitingVacancy[chatId].step++;
+    console.log(
+      `⏩ ${step.label} skip qilindi, keyingi step: ${userStates.awaitingVacancy[chatId].step}`
+    );
+    await handleNextStep(chatId);
+  } catch (error) {
+    console.error("Error in handleSkip:", error);
     await bot.sendMessage(
       chatId,
-      "⚠️ Bu maydon majburiy! O'tkazib yuborish mumkin emas.",
+      "❌ O'tkazib yuborishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
       {
         reply_markup: {
           inline_keyboard: [
@@ -1524,39 +1601,7 @@ async function handleSkip(chatId) {
         },
       }
     );
-    return;
   }
-
-  // Special handling for link title step - skip both title and URL
-  if (step.label === "🔗 Havola sarlavhasi") {
-    userStates.awaitingVacancy[chatId].data[step.label] = "-";
-    userStates.awaitingVacancy[chatId].data[steps[7].label] = "-"; // Skip URL step too
-    userStates.awaitingVacancy[chatId].step += 2; // Skip both steps
-    console.log(
-      `⏩ Havola sarlavhasi va URL skip qilindi, keyingi step: ${userStates.awaitingVacancy[chatId].step}`
-    );
-    await handleNextStep(chatId);
-    return;
-  }
-
-  // Special handling for link URL step - skip only URL
-  if (step.label === "🔗 Havola URL") {
-    userStates.awaitingVacancy[chatId].data[step.label] = "-";
-    userStates.awaitingVacancy[chatId].step++;
-    console.log(
-      `⏩ Havola URL skip qilindi, keyingi step: ${userStates.awaitingVacancy[chatId].step}`
-    );
-    await handleNextStep(chatId);
-    return;
-  }
-
-  // Regular skip
-  userStates.awaitingVacancy[chatId].data[step.label] = "-";
-  userStates.awaitingVacancy[chatId].step++;
-  console.log(
-    `⏩ ${step.label} skip qilindi, keyingi step: ${userStates.awaitingVacancy[chatId].step}`
-  );
-  await handleNextStep(chatId);
 }
 
 async function handleNextStep(chatId) {
