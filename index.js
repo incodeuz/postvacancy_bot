@@ -413,12 +413,24 @@ function setupBotEventHandlers() {
           return;
         }
 
-        // Block all other actions during active process
-        await bot.answerCallbackQuery(callbackQuery.id, {
-          text: "⚠️ Avval joriy jarayonni tugatishingiz kerak!",
-          show_alert: true,
-        });
-        return;
+        // Allow preview-related actions even during active process
+        if (
+          data === "edit_preview" ||
+          data === "confirm_post" ||
+          data === "cancel_post" ||
+          data === "back_to_preview" ||
+          data.startsWith("edit_step_") ||
+          data === "cancel_edit"
+        ) {
+          // These actions are allowed during preview
+        } else {
+          // Block other actions during active process
+          await bot.answerCallbackQuery(callbackQuery.id, {
+            text: "⚠️ Avval joriy jarayonni tugatishingiz kerak!",
+            show_alert: true,
+          });
+          return;
+        }
       }
 
       // Handle button clicks
